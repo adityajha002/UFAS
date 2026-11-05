@@ -1,0 +1,273 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	_ "modernc.org/sqlite" // pure-Go SQLite driver
+)
+
+const driverName = "sqlite"
+
+const schema = `
+CREATE TABLE IF NOT EXISTS faculty (
+  id           TEXT PRIMARY KEY,
+  employee_id  TEXT NOT NULL UNIQUE,
+  name         TEXT NOT NULL,
+  public_key   BLOB,
+  code_hash    BLOB,
+  code_expires INTEGER
+);
+CREATE TABLE IF NOT EXISTS challenges (
+  id         TEXT PRIMARY KEY,
+  faculty_id TEXT NOT NULL,
+  nonce      TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used       INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS attendance (
+  faculty_id  TEXT NOT NULL,
+  day         TEXT NOT NULL,
+  marked_at   INTEGER NOT NULL,
+  lat_micro   INTEGER,
+  lon_micro   INTEGER,
+  accuracy_cm INTEGER,
+  distance_m  INTEGER,
+  note        TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (faculty_id, day)
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  endpoint TEXT NOT NULL,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  faculty_id TEXT,
+  challenge_id TEXT,
+  remote_ip TEXT,
+  user_agent TEXT,
+  lat_micro INTEGER,
+  lon_micro INTEGER,
+  accuracy_cm INTEGER,
+  distance_m INTEGER,
+  policy TEXT,
+  duration_ms INTEGER
+);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS config_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  config_json TEXT NOT NULL, -- JSON {"geofence.radius_m":{"old":150,"new":200}}
+  remote_ip TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_log_faculty ON audit_log(faculty_id, ts);
+CREATE INDEX IF NOT EXISTS idx_audit_log_endpoint ON audit_log(endpoint, ts);
+CREATE INDEX IF NOT EXISTS idx_audit_log_outcome ON audit_log(outcome, ts);
+CREATE TABLE IF NOT EXISTS admin_actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  action TEXT NOT NULL,  -- faculty_add | code_issue | faculty_revoke | manual_mark | config_change | config_reset | shutdown
+  target TEXT,           -- employee_id, or config key(s)
+  detail TEXT,           -- JSON; NEVER enrollment codes, tokens or hashes
+  outcome TEXT NOT NULL, -- 'ok' or the error code
+  remote_ip TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_admin_actions_ts ON admin_actions(ts);
+CREATE VIEW IF NOT EXISTS attendance_report AS
+  SELECT f.employee_id, f.name, a.day,
+         datetime(a.marked_at, 'unixepoch', '+5 hours', '+30 minutes') AS marked_at_ist,
+         a.distance_m, a.note
+  FROM attendance a JOIN faculty f ON f.id = a.faculty_id;
+`
+
+var errNotFound = errors.New("employee not found")
+
+// Typed so the HTTP layer can tell them apart from database errors. The text
+// is exactly what the CLI has always printed.
+var (
+	errBadDate       = errors.New("date must be YYYY-MM-DD")
+	errAlreadyMarked = errors.New("already marked")
+)
+
+type alreadyMarkedError struct{ emp, day string }
+
+func (e alreadyMarkedError) Error() string {
+	return fmt.Sprintf("%s already has attendance on %s", e.emp, e.day)
+}
+func (alreadyMarkedError) Is(target error) bool { return target == errAlreadyMarked }
+
+// codeTTL is how long an enrollment code stays valid.
+const codeTTL = 15 * time.Minute
+
+// openDB opens the SQLite file with a single connection: writes are serialised,
+// which is what makes the "consume once" steps atomic.
+func openDB(path string) (*sql.DB, error) {
+	db, err := sql.Open(driverName, path)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	for _, stmt := range []string{
+		"PRAGMA busy_timeout = 5000",
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA synchronous = NORMAL",
+		schema,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("init db: %w", err)
+		}
+	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate db: %w", err)
+	}
+	return db, nil
+}
+
+// migrate adds columns that were introduced after a table may already exist in
+// an older attendance.db (CREATE TABLE IF NOT EXISTS never alters a table).
+func migrate(db *sql.DB) error {
+	for _, c := range []struct{ table, col, def string }{
+		{"audit_log", "duration_ms", "INTEGER"},
+		{"settings", "updated_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"config_history", "remote_ip", "TEXT"},
+	} {
+		if err := ensureColumn(db, c.table, c.col, c.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureColumn(db *sql.DB, table, col, def string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	have := false
+	for rows.Next() { // the single connection must be free again before ALTER
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		if n == col {
+			have = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if have {
+		return nil
+	}
+	_, err = db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, col, def))
+	return err
+}
+
+func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// ---- admin operations (used by the CLI and by tests) ----
+
+func addFaculty(db *sql.DB, employeeID, name string) (string, error) {
+	id := randHex(16)
+	_, err := db.Exec(`INSERT INTO faculty (id, employee_id, name) VALUES (?, ?, ?)`, id, employeeID, name)
+	return id, err
+}
+
+// issueCode creates a one-time enrollment code valid for 15 minutes.
+func issueCode(db *sql.DB, employeeID string, now time.Time) (string, error) {
+	code := randHex(10) // 80 bits
+	res, err := db.Exec(`UPDATE faculty SET code_hash=?, code_expires=? WHERE employee_id=?`,
+		hashCode(code), now.Add(codeTTL).Unix(), employeeID)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return "", errNotFound
+	}
+	return code, nil
+}
+
+func revokeFaculty(db *sql.DB, employeeID string) error {
+	res, err := db.Exec(`UPDATE faculty SET public_key=NULL, code_hash=NULL, code_expires=NULL WHERE employee_id=?`, employeeID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return errNotFound
+	}
+	return nil
+}
+
+func deleteFaculty(db *sql.DB, employeeID string) error {
+	return withTx(context.Background(), db, func(tx *sql.Tx) error {
+		var facultyID string
+		if err := tx.QueryRow(`SELECT id FROM faculty WHERE employee_id=?`, employeeID).Scan(&facultyID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errNotFound
+			}
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM attendance WHERE faculty_id=?`, facultyID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM challenges WHERE faculty_id=?`, facultyID); err != nil {
+			return err
+		}
+		res, err := tx.Exec(`DELETE FROM faculty WHERE id=?`, facultyID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return errNotFound
+		}
+		return nil
+	})
+}
+
+// markManual records attendance without a phone (lat/lon/accuracy/distance stay NULL).
+func markManual(db *sql.DB, employeeID, day, note string, now time.Time) error {
+	if _, err := time.Parse("2006-01-02", day); err != nil {
+		return errBadDate
+	}
+	res, err := db.Exec(`INSERT INTO attendance (faculty_id, day, marked_at, note)
+		SELECT id, ?, ?, ? FROM faculty WHERE employee_id=?
+		ON CONFLICT(faculty_id, day) DO NOTHING`, day, now.Unix(), note, employeeID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return nil
+	}
+	var one int
+	if err := db.QueryRow(`SELECT 1 FROM faculty WHERE employee_id=?`, employeeID).Scan(&one); err != nil {
+		return errNotFound
+	}
+	return alreadyMarkedError{emp: employeeID, day: day}
+}

@@ -1,0 +1,61 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs and temp files
+logs/
+*.log
+*.tmp
+*.bak
+*.orig
+
+# Node / frontend build output
+node_modules/
+**/node_modules/
+**/dist/
+**/build/
+**/coverage/
+**/.cache/
+*.tsbuildinfo
+
+# Expo / React Native generated output
+.expo/
+.expo-shared/
+**/.expo/
+**/.expo-shared/
+**/android/app/build/
+**/android/build/
+**/ios/build/
+**/ios/Pods/
+**/.gradle/
+
+# Go build output
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+/server/server
+/admin/server/server
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Large / downloaded binary artifacts
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.apk
+*.aab
+*.jks
+*.keystore
+*.deb
+*.deb.*

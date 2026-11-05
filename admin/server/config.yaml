@@ -1,0 +1,26 @@
+server:
+  listen: "0.0.0.0:8082"
+  # Share the same database as the phone-facing server so faculty rows and issue-code
+  # lookups resolve in one place instead of diverging across two separate SQLite files.
+  db_file: "/home/aditya-jha/Documents/UFAS/server/attendance.db"
+
+geofence:
+  lat: 28.6068268701292
+  lon: 77.02445575231003
+  radius_m: 1500
+  max_accuracy_m: 80
+
+window:
+  start: "00:00"
+  end: "24:00"
+
+admin:
+  listen: "0.0.0.0:9090"
+  token_sha256: ""
+
+audit:
+  retention_days: 180
+  max_rows: 500000
+
+# HOME : 28.6068268701292, 77.02445575231003
+# E-Block : 28.59524767667004, 77.01971751585337
