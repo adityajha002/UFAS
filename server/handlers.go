@@ -104,6 +104,8 @@ var errTable = map[string]struct {
 	"poor_accuracy":       {422, "GPS accuracy is too low"},
 	"outside_area":        {422, "you are outside the allowed area"},
 	"already_marked":      {409, "already marked today"},
+	"already_in":          {409, "already in"},
+	"not_in":              {409, "not in"},
 	"too_many_challenges": {429, "too many open challenges"},
 }
 
@@ -426,6 +428,7 @@ func (s *Server) challenge(w http.ResponseWriter, r *http.Request) (int, any, er
 
 func (s *Server) attendance(w http.ResponseWriter, r *http.Request) (int, any, error) {
 	var req struct {
+		Action      string `json:"action"`
 		ChallengeID string `json:"challenge_id"`
 		FacultyID   string `json:"faculty_id"`
 		LatMicro    int64  `json:"lat_micro"`
@@ -460,6 +463,97 @@ func (s *Server) attendance(w http.ResponseWriter, r *http.Request) (int, any, e
 	nonce, pub, err := checkChallenge(ctx, s.db, req.ChallengeID, req.FacultyID, nowU)
 	if err != nil {
 		return 0, nil, err
+	}
+	if req.Action != "" {
+		if req.Action != "in" && req.Action != "out" {
+			return 0, nil, apiErr{"bad_request"}
+		}
+		if !verifySig(pub, attendMsgV2(req.Action, req.ChallengeID, nonce, req.FacultyID, req.LatMicro, req.LonMicro, req.AccuracyCm), req.Signature) {
+			return 0, nil, apiErr{"bad_signature"}
+		}
+		if !windowOpenAt(now, cfg) {
+			return 0, nil, apiErr{"closed"}
+		}
+		if req.AccuracyCm > int64(cfg.MaxAccM*100) {
+			return 0, nil, apiErr{"poor_accuracy"}
+		}
+		if dist > cfg.RadiusM {
+			return 0, nil, apiErr{"outside_area"}
+		}
+		day := now.In(ist).Format("2006-01-02")
+		distM := int64(math.Round(dist))
+		var stateIsIn bool
+		var todayWorkedS int64
+		var startedAt sql.NullInt64
+		err = withTx(ctx, s.db, func(tx *sql.Tx) error {
+			if err := consumeChallenge(ctx, tx, req.ChallengeID, nowU); err != nil {
+				return err
+			}
+			if req.Action == "in" {
+				var inState int
+				if err := tx.QueryRowContext(ctx, `SELECT is_in FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, day).Scan(&inState); err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						_, err = tx.ExecContext(ctx, `INSERT INTO attendance_state (faculty_id, day, is_in, started_at, updated_at) VALUES (?, ?, 1, ?, ?)`, req.FacultyID, day, nowU, nowU)
+						if err != nil {
+							return err
+						}
+						_, err = tx.ExecContext(ctx, `INSERT INTO attendance (faculty_id, day, marked_at, lat_micro, lon_micro, accuracy_cm, distance_m)
+							VALUES (?,?,?,?,?,?,?)
+							ON CONFLICT(faculty_id, day) DO UPDATE SET marked_at=excluded.marked_at, lat_micro=excluded.lat_micro, lon_micro=excluded.lon_micro, accuracy_cm=excluded.accuracy_cm, distance_m=excluded.distance_m`,
+							req.FacultyID, day, nowU, req.LatMicro, req.LonMicro, req.AccuracyCm, distM)
+						if err != nil {
+							return err
+						}
+						stateIsIn = true
+						return nil
+					}
+					return err
+				}
+				if inState == 1 {
+					return apiErr{"already_in"}
+				}
+				_, err = tx.ExecContext(ctx, `UPDATE attendance_state SET is_in=1, started_at=?, updated_at=? WHERE faculty_id=? AND day=?`, nowU, nowU, req.FacultyID, day)
+				if err != nil {
+					return err
+				}
+				_, err = tx.ExecContext(ctx, `INSERT INTO attendance (faculty_id, day, marked_at, lat_micro, lon_micro, accuracy_cm, distance_m)
+					VALUES (?,?,?,?,?,?,?)
+					ON CONFLICT(faculty_id, day) DO UPDATE SET marked_at=excluded.marked_at, lat_micro=excluded.lat_micro, lon_micro=excluded.lon_micro, accuracy_cm=excluded.accuracy_cm, distance_m=excluded.distance_m`,
+					req.FacultyID, day, nowU, req.LatMicro, req.LonMicro, req.AccuracyCm, distM)
+				if err != nil {
+					return err
+				}
+				stateIsIn = true
+				return nil
+			}
+			if err := tx.QueryRowContext(ctx, `SELECT is_in, started_at FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, day).Scan(&stateIsIn, &startedAt); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return apiErr{"not_in"}
+				}
+				return err
+			}
+			if !stateIsIn {
+				return apiErr{"not_in"}
+			}
+			todayWorkedS = nowU - startedAt.Int64
+			_, err = tx.ExecContext(ctx, `UPDATE attendance_state SET is_in=0, started_at=NULL, today_worked_s=?, updated_at=? WHERE faculty_id=? AND day=?`, todayWorkedS, nowU, req.FacultyID, day)
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `INSERT INTO attendance (faculty_id, day, marked_at, lat_micro, lon_micro, accuracy_cm, distance_m)
+				VALUES (?,?,?,?,?,?,?)
+				ON CONFLICT(faculty_id, day) DO UPDATE SET marked_at=excluded.marked_at, lat_micro=excluded.lat_micro, lon_micro=excluded.lon_micro, accuracy_cm=excluded.accuracy_cm, distance_m=excluded.distance_m`,
+				req.FacultyID, day, nowU, req.LatMicro, req.LonMicro, req.AccuracyCm, distM)
+			if err != nil {
+				return err
+			}
+			stateIsIn = false
+			return nil
+		})
+		if err != nil {
+			return 0, nil, err
+		}
+		return 201, map[string]any{"action": req.Action, "day": day, "at_ist": now.In(ist).Format(time.RFC3339), "distance_m": distM, "is_in": stateIsIn, "today_worked_s": todayWorkedS}, nil
 	}
 	// 4. signature over the string rebuilt from the stored nonce
 	if !verifySig(pub, attendMsg(req.ChallengeID, nonce, req.FacultyID, req.LatMicro, req.LonMicro, req.AccuracyCm), req.Signature) {
@@ -525,6 +619,9 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) (int, any, erro
 
 	var name string
 	days := []string{}
+	var isIn bool
+	var openSince string
+	var todayWorkedS int64
 	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
 		nonce, pub, err := checkChallenge(ctx, tx, req.ChallengeID, req.FacultyID, nowU)
 		if err != nil {
@@ -552,17 +649,42 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) (int, any, erro
 			}
 			days = append(days, d)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		var startedAt sql.NullInt64
+		var worked int64
+		err = tx.QueryRowContext(ctx, `SELECT is_in, started_at, today_worked_s FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, today).Scan(&isIn, &startedAt, &worked)
+		switch {
+		case err == nil:
+			if isIn && startedAt.Valid {
+				openSince = time.Unix(startedAt.Int64, 0).In(ist).Format(time.RFC3339)
+				todayWorkedS = nowU - startedAt.Int64
+			} else {
+				todayWorkedS = worked
+			}
+		case errors.Is(err, sql.ErrNoRows):
+			isIn = false
+			openSince = ""
+			dayWorked := 0
+			_ = dayWorked
+		default:
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return 0, nil, err
 	}
 	markedToday := len(days) > 0 && days[0] == today
 	return 200, map[string]any{
-		"name":         name,
-		"today":        today,
-		"marked_today": markedToday,
-		"window_open":  s.windowOpen(now),
-		"days":         days,
+		"name":           name,
+		"today":          today,
+		"marked_today":   markedToday,
+		"window_open":    s.windowOpen(now),
+		"days":           days,
+		"is_in":          isIn,
+		"open_since_ist": openSince,
+		"today_worked_s": todayWorkedS,
 	}, nil
 }

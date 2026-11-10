@@ -14,7 +14,9 @@ export type MarkMode = 'v1' | 'v2' | 'unknown';
 
 export function markMode(data: HistoryResponse | null, fresh: boolean): MarkMode {
   if (!data || !fresh) return 'unknown';
-  return typeof data.is_in === 'boolean' ? 'v2' : 'v1';
+  // This app intentionally uses the newer entry/exit flow. Fresh server data always
+  // chooses the IN/OUT mode, even if a legacy backend omitted `is_in` from `/history`.
+  return 'v2';
 }
 
 /** What the server last said: which action the button offers, and whether the window is open. */
@@ -22,7 +24,8 @@ export type InOutBase = { state: 'idle' | 'closed' | 'unknown'; action: AttendAc
 
 export function inOutBase(data: HistoryResponse | null, fresh: boolean): InOutBase {
   if (!data || markMode(data, fresh) !== 'v2') return { state: 'unknown', action: null };
-  return { state: data.window_open ? 'idle' : 'closed', action: data.is_in ? 'out' : 'in' };
+  const isIn = data.is_in === true;
+  return { state: data.window_open ? 'idle' : 'closed', action: isIn ? 'out' : 'in' };
 }
 
 /** Button look. Unknown state: spinner while the first /history is loading, otherwise disabled. */
@@ -86,7 +89,7 @@ export function successMessage(res: AttendanceV2Response): string {
 export function todayLine(data: HistoryResponse | null, fresh: boolean): string | null {
   if (!data || markMode(data, fresh) !== 'v2') return null;
   const worked = typeof data.today_worked_s === 'number' && data.today_worked_s > 0 ? formatWorked(data.today_worked_s) : null;
-  if (data.is_in) {
+  if (data.is_in === true) {
     const t = clockHM(data.open_since_ist);
     const parts = [t ? `Today: IN since ${t}` : 'Today: IN'];
     if (worked) parts.push(`worked ${worked}`);

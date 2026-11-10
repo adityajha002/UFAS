@@ -5,7 +5,8 @@ set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGS="$ROOT/logs"
-mkdir -p "$LOGS"
+DATA_DIR="$ROOT/data"
+mkdir -p "$LOGS" "$DATA_DIR"
 
 PIDS=()
 
@@ -64,6 +65,9 @@ trap stop_all INT TERM
 # Install JS deps on first run only.
 [ -d "$ROOT/admin/server/webui/node_modules" ] || (cd "$ROOT/admin/server/webui" && npm install)
 [ -d "$ROOT/app/node_modules" ]                || (cd "$ROOT/app" && npm install)
+
+# The admin server embeds the built web UI from admin/server/webui/dist.
+(cd "$ROOT/admin/server/webui" && npm run build)
 
 write_demo_env
 

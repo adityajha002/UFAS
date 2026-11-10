@@ -2,7 +2,7 @@ server:
   listen: "0.0.0.0:8082"
   # Share the same database as the phone-facing server so faculty rows and issue-code
   # lookups resolve in one place instead of diverging across two separate SQLite files.
-  db_file: "/home/aditya-jha/Documents/UFAS/server/attendance.db"
+  db_file: "../../data/attendance.db"
 
 geofence:
   lat: 28.6068268701292
