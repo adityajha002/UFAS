@@ -1,6 +1,6 @@
 server:
   listen: "0.0.0.0:8080"
-  db_file: "/home/aditya-jha/Documents/UFAS/server/attendance.db"
+  db_file: "attendance.db"
 
 geofence:
   lat: 28.6068268701292
@@ -8,9 +8,21 @@ geofence:
   radius_m: 1500
   max_accuracy_m: 80
 
-window:
-  start: "00:00"
-  end: "24:00"
+attendance_windows:
+  in_windows:
+    - id: "in-morning"
+      start: "09:00"
+      end: "10:00"
+    - id: "in-afternoon"
+      start: "13:00"
+      end: "14:00"
+  out_windows:
+    - id: "out-lunch"
+      start: "13:00"
+      end: "14:00"
+    - id: "out-evening"
+      start: "16:00"
+      end: "17:00"
 
 admin:
   listen: ""

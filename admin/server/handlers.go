@@ -134,6 +134,10 @@ var errTable = map[string]struct {
 	"invalid_input":     {422, "one or more fields are invalid"},
 	"future_date":       {400, "date must not be in the future"},
 	"confirm_required":  {400, "confirmation is missing or wrong"},
+
+	// early-exit approval (admin only)
+	"already_approved": {409, "this exit request was already approved"},
+	"not_in":           {409, "faculty member is not currently IN"},
 }
 
 type handler func(w http.ResponseWriter, r *http.Request) (int, any, error)

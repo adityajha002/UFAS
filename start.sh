@@ -28,7 +28,11 @@ detect_demo_ip() {
 write_demo_env() {
   local ip
   ip="$(detect_demo_ip)"
-  printf 'EXPO_PUBLIC_API_BASE_URL=http://%s:8080\n' "$ip" > "$ROOT/app/.env"
+  {
+    printf 'EXPO_PUBLIC_API_BASE_URL=http://%s:8080\n' "$ip"
+    # Fallbacks: Android emulator host alias and local simulator/dev on this machine.
+    printf 'EXPO_PUBLIC_API_FALLBACK_BASE_URLS=http://10.0.2.2:8080,http://127.0.0.1:8080\n'
+  } > "$ROOT/app/.env"
   echo "-> demo backend URL: http://$ip:8080"
 }
 

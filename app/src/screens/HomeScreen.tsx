@@ -12,7 +12,8 @@ import { dayDetailLookup, hasDayStatus } from '../lib/dayStatus';
 import { useMarkAttendance } from '../hooks/useMarkAttendance';
 import { useMarkInOut } from '../hooks/useMarkInOut';
 import { useHistory } from '../hooks/useHistory';
-import { inOutBase, inOutButton, inOutMessage, markMode, todayLine } from '../lib/inOut';
+import { useRequestOut } from '../hooks/useRequestOut';
+import { inOutBase, inOutButton, inOutMessage, markMode, todayLine, windowSummary } from '../lib/inOut';
 
 type Props = {
   facultyId: string;
@@ -33,19 +34,23 @@ export default function HomeScreen({ facultyId, name, onNeedsEnrol }: Props) {
 
   // v2: MARK IN / MARK OUT from the server's `is_in`; unknown until /history answers this session.
   const io = inOutBase(h.data, h.fresh);
-  const v2 = useMarkInOut({ facultyId, action: io.action, onDone: h.afterMark });
-  const v2Button = inOutButton(io, v2.busy, h.status);
+  const requestAction = io.action === 'request_out' && !io.pending;
+  const v2 = useMarkInOut({ facultyId, action: io.action === 'request_out' ? null : io.action, onDone: h.afterMark });
+  const request = useRequestOut({ facultyId, onDone: () => h.afterMark() });
+  const v2Button = inOutButton(io, v2.busy || request.busy, h.status);
 
   const card = mode === 'v1'
     ? { state: v1.state, message: v1.message, onMark: v1.mark }
     : {
       state: v2Button.state,
       label: v2Button.label,
-      message: inOutMessage(io, h.status, v2.stage, v2.notice),
-      onMark: v2.mark,
+      message: requestAction ? request.notice ?? inOutMessage(io, h.status, request.stage, request.notice) : inOutMessage(io, h.status, v2.stage, v2.notice),
+      onMark: requestAction ? request.mark : v2.mark,
       inOut: true,
       today: todayLine(h.data, h.fresh),
     };
+
+  const schedule = windowSummary(h.data, h.fresh);
 
   const weeks = useMemo(() => {
     const t = Date.now();
@@ -81,6 +86,13 @@ export default function HomeScreen({ facultyId, name, onNeedsEnrol }: Props) {
     <View style={styles.page}>
       <Header name={shownName} />
       <GreetingCard {...card} />
+      {schedule.length > 0 && (
+        <View style={styles.scheduleBox}>
+          {schedule.map((line) => (
+            <Text key={line} style={styles.scheduleText}>{line}</Text>
+          ))}
+        </View>
+      )}
       {h.data && banner && (
         <Text style={styles.banner} accessibilityRole="alert">
           {banner}{h.savedAt ? ` Last updated ${updatedLabel(h.savedAt, now)}.` : ''}
@@ -112,6 +124,8 @@ const useStyles = makeStyles((s) => ({
   btn: { minHeight: 48, backgroundColor: colors.yellow, borderRadius: s(24), paddingHorizontal: s(48), paddingVertical: s(28), marginTop: s(40), alignItems: 'center', justifyContent: 'center' },
   btnText: { color: colors.navyHeader, fontSize: s(40), fontWeight: '800', letterSpacing: 1 },
   banner: { color: '#7A3E00', fontSize: s(34), lineHeight: s(48), marginHorizontal: s(SIDE), marginTop: s(28) },
+  scheduleBox: { marginHorizontal: s(SIDE), marginTop: s(10), paddingHorizontal: s(28), paddingVertical: s(18), backgroundColor: '#F4E7D2', borderRadius: s(20) },
+  scheduleText: { color: colors.navyHeader, fontSize: s(34), lineHeight: s(48), fontWeight: '700' },
   section: { color: colors.navyHeader, fontSize: s(48), fontWeight: '900', marginHorizontal: s(SIDE), marginTop: s(44), marginBottom: s(10) },
   summary: { color: colors.navyHeader, fontSize: s(32), fontWeight: '700', opacity: 0.8, marginHorizontal: s(SIDE), marginBottom: s(22) },
 }));

@@ -1,4 +1,4 @@
-import { attendV1Payload, attendV2Payload, AttendAction, historyPayload } from './payload';
+import { attendV1Payload, attendV2Payload, attendRequestOutPayload, AttendAction, historyPayload } from './payload';
 
 // Same vectors as PayloadBuilderTest.kt and the server's crypto tests.
 describe('signed payloads', () => {
@@ -21,8 +21,13 @@ describe('signed payloads', () => {
 
   it.each(['', 'IN', 'Out', 'in|x', 'attend'])('v2 rejects action %j', (bad) => {
     expect(() => attendV2Payload({
-      action: bad as AttendAction, challengeId: 'c', nonce: 'n', facultyId: 'f', latMicro: 1, lonMicro: 2, accuracyCm: 3,
+      action: bad as any, challengeId: 'c', nonce: 'n', facultyId: 'f', latMicro: 1, lonMicro: 2, accuracyCm: 3,
     })).toThrow('bad_action');
+  });
+
+  it('request_out golden vector', () => {
+    expect(attendRequestOutPayload({ challengeId: 'c0ffee', nonce: 'bm9uY2U', facultyId: 'EMP001', latMicro: 28606827, lonMicro: 77209000, accuracyCm: 1500 }))
+      .toBe('attend.v2|request_out|c0ffee|bm9uY2U|EMP001|28606827|77209000|1500');
   });
 
   it('history golden vector', () => {

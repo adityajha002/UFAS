@@ -15,14 +15,48 @@ export type Status = {
 
 export type Source = "phone" | "manual";
 
+export type PendingExitRequest = {
+  id: string;
+  requested_at_ist: string;
+  status: string;
+};
+
+export type StaleExitRequest = {
+  id: string;
+  employee_id: string;
+  name: string;
+  day: string;
+  requested_at_ist: string;
+  status: string;
+};
+
 export type DayItem = {
   employee_id: string; name: string; enrolled: boolean; marked: boolean;
   marked_at_ist: string | null; distance_m: number | null; source: Source | null; note: string;
+  pending_exit_request?: PendingExitRequest | null;
 };
 export type Day = {
   date: string; is_today: boolean; is_weekend: boolean; is_future: boolean;
   summary: { total: number; marked: number; not_marked: number; not_enrolled: number };
   faculty: DayItem[];
+  stale_exit_requests?: StaleExitRequest[];
+};
+
+export type ExitRequestDetail = {
+  id: string;
+  employee_id: string;
+  name: string;
+  day: string;
+  requested_at: number;
+  requested_at_ist: string;
+  lat_micro: number;
+  lon_micro: number;
+  accuracy_cm: number;
+  distance_m: number;
+  status: string;
+  approved_at_ist?: string | null;
+  approved_by?: string | null;
+  is_in?: boolean | null;
 };
 
 export type FacultyRow = {
@@ -72,4 +106,5 @@ export type Modal =
   | { kind: "delete"; employee_id: string }
   | { kind: "mark"; employee_id?: string; date?: string }
   | { kind: "shutdown" }
-  | { kind: "history" };
+  | { kind: "history" }
+  | { kind: "exit_request"; request_id: string; employee_id: string; name: string };

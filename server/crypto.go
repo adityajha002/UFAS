@@ -37,6 +37,10 @@ func attendMsg(challengeID, nonce, facultyID string, latMicro, lonMicro, accurac
 	return fmt.Sprintf("attend.v1|%s|%s|%s|%d|%d|%d", challengeID, nonce, facultyID, latMicro, lonMicro, accuracyCm)
 }
 
+func attendMsgV2(action, challengeID, nonce, facultyID string, latMicro, lonMicro, accuracyCm int64) string {
+	return fmt.Sprintf("attend.v2|%s|%s|%s|%s|%d|%d|%d", action, challengeID, nonce, facultyID, latMicro, lonMicro, accuracyCm)
+}
+
 func historyMsg(challengeID, nonce, facultyID string) string {
 	return fmt.Sprintf("history.v1|%s|%s|%s", challengeID, nonce, facultyID)
 }

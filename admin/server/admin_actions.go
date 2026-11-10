@@ -16,6 +16,7 @@ import (
 var actionNames = map[string]bool{
 	"faculty_add": true, "code_issue": true, "faculty_revoke": true, "manual_mark": true,
 	"config_change": true, "config_reset": true, "shutdown": true,
+	"exit_request_approve": true,
 }
 
 // outcomeOf is "ok" or the error code a client would see.

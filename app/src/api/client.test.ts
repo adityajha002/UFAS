@@ -77,6 +77,38 @@ describe('createClient', () => {
     await expect(c.challenge('f1')).rejects.toMatchObject({ code: 'network' });
   });
 
+  it('retries with fallback base URL on transport failure', async () => {
+    const f = jest.fn()
+      .mockImplementationOnce(async () => { throw new TypeError('Network request failed'); })
+      .mockImplementationOnce(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ challenge_id: 'c2', nonce: 'n2' }),
+      }) as Response);
+    const c = createClient({
+      baseUrl: 'http://192.168.1.10:8080',
+      fallbackBaseUrls: ['http://10.0.2.2:8080'],
+      fetchImpl: f as unknown as typeof fetch,
+    });
+
+    await expect(c.challenge('f1')).resolves.toEqual({ challenge_id: 'c2', nonce: 'n2' });
+    expect(f).toHaveBeenCalledTimes(2);
+    expect((f.mock.calls[0] as unknown as [string])[0]).toBe('http://192.168.1.10:8080/challenge');
+    expect((f.mock.calls[1] as unknown as [string])[0]).toBe('http://10.0.2.2:8080/challenge');
+  });
+
+  it('does not retry fallback on HTTP error responses', async () => {
+    const f = jest.fn(async () => ({ ok: false, status: 400, json: async () => ({ error: 'bad_request' }) }) as Response);
+    const c = createClient({
+      baseUrl: 'http://192.168.1.10:8080',
+      fallbackBaseUrls: ['http://10.0.2.2:8080'],
+      fetchImpl: f as unknown as typeof fetch,
+    });
+
+    await expect(c.challenge('f1')).rejects.toMatchObject({ code: 'bad_request' });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
   it('maps an abort to timeout', async () => {
     const f = jest.fn((_u: string, init: RequestInit) => new Promise((_res, rej) => {
       init.signal!.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));

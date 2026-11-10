@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import logoUrl from "./asset/logo.png";
 import { api, ApiError, setUnauthorizedHandler } from "./api";
-import { CodeModal, DeleteDialog, HistoryModal, MarkModal, RevokeDialog, ShutdownDialog } from "./components/dialogs";
+import { CodeModal, DeleteDialog, ExitRequestModal, HistoryModal, MarkModal, RevokeDialog, ShutdownDialog } from "./components/dialogs";
 import { Toasts, type ToastItem } from "./components/Toasts";
 import { Ctx, type AppCtx, type AuditPreset } from "./ctx";
 import { usePolling } from "./hooks/usePolling";
@@ -131,6 +131,7 @@ function Dashboard({ initial, signOut }: { initial: Status | null; signOut: () =
         {modal?.kind === "mark" && <MarkModal employeeId={modal.employee_id} date={modal.date} />}
         {modal?.kind === "shutdown" && <ShutdownDialog />}
         {modal?.kind === "history" && <HistoryModal />}
+        {modal?.kind === "exit_request" && <ExitRequestModal requestId={modal.request_id} employeeId={modal.employee_id} name={modal.name} />}
         <Toasts items={toasts} />
       </div>
     </Ctx.Provider>

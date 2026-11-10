@@ -60,15 +60,82 @@ function DayMode({ date, setDate, showAbsent, setShowAbsent }: {
             {shown.is_future && <p className="muted">Future date, nothing to show.</p>}
             {shown.is_weekend && !shown.is_future && <p className="note">Weekend, the attendance window is closed.</p>}
             {!shown.is_future && present.length === 0 && <p className="muted">Nobody has been marked present on this day.</p>}
+            {shown.is_today && (shown.stale_exit_requests?.length ?? 0) > 0 && (
+              <div className="banner warn" style={{ margin: "10px 0" }}>
+                <strong>Pending early-exit requests from earlier days:</strong>
+                <ul className="rows" style={{ marginTop: 6 }}>
+                  {shown.stale_exit_requests!.map((s) => (
+                    <li
+                      key={s.id}
+                      className="pill-row pending-exit"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openModal({
+                        kind: "exit_request",
+                        request_id: s.id,
+                        employee_id: s.employee_id,
+                        name: s.name,
+                      })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openModal({
+                            kind: "exit_request",
+                            request_id: s.id,
+                            employee_id: s.employee_id,
+                            name: s.name,
+                          });
+                        }
+                      }}
+                    >
+                      <span className="name" title={s.employee_id}>{s.name} ({s.employee_id}) · {s.day}</span>
+                      <span className="chip warn">Early exit requested</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <ul className="rows">
-              {present.map((f) => (
-                <li key={f.employee_id} className="pill-row">
-                  <span className="name" title={f.employee_id}>{f.name}</span>
-                  {f.source === "manual"
-                    ? <span className="chip" title={`Entered at ${f.marked_at_ist ? timePart(f.marked_at_ist) : "?"}${f.note ? `: ${f.note}` : ""}`}>manual</span>
-                    : <span className="time">{f.marked_at_ist ? timePart(f.marked_at_ist) : ""}</span>}
-                </li>
-              ))}
+              {present.map((f) => {
+                const isPending = shown.is_today && f.pending_exit_request?.status === "pending";
+                return (
+                  <li
+                    key={f.employee_id}
+                    className={isPending ? "pill-row pending-exit" : "pill-row"}
+                    role={isPending ? "button" : undefined}
+                    tabIndex={isPending ? 0 : undefined}
+                    aria-label={isPending ? `Pending early exit request for ${f.name}` : undefined}
+                    onClick={isPending ? () => openModal({
+                      kind: "exit_request",
+                      request_id: f.pending_exit_request!.id,
+                      employee_id: f.employee_id,
+                      name: f.name,
+                    }) : undefined}
+                    onKeyDown={isPending ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openModal({
+                          kind: "exit_request",
+                          request_id: f.pending_exit_request!.id,
+                          employee_id: f.employee_id,
+                          name: f.name,
+                        });
+                      }
+                    } : undefined}
+                  >
+                    <span className="name" title={f.employee_id}>{f.name}</span>
+                    {isPending ? (
+                      <span className="chip warn" title={`Requested at ${timePart(f.pending_exit_request!.requested_at_ist)}`}>
+                        Early exit requested
+                      </span>
+                    ) : f.source === "manual" ? (
+                      <span className="chip" title={`Entered at ${f.marked_at_ist ? timePart(f.marked_at_ist) : "?"}${f.note ? `: ${f.note}` : ""}`}>manual</span>
+                    ) : (
+                      <span className="time">{f.marked_at_ist ? timePart(f.marked_at_ist) : ""}</span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
             {!shown.is_future && absent.length > 0 && (
               <>

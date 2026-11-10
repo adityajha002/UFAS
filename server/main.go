@@ -86,6 +86,39 @@ func parseHM(key, def string) (int, error) {
 	return m, nil
 }
 
+func (w *AttendanceWindow) UnmarshalYAML(value *yaml.Node) error {
+	type raw struct {
+		ID    string `yaml:"id"`
+		Start string `yaml:"start"`
+		End   string `yaml:"end"`
+	}
+	var r raw
+	if err := value.Decode(&r); err != nil {
+		return err
+	}
+	if r.ID == "" {
+		return errors.New("window id is required")
+	}
+	if r.Start == "24:00" {
+		return fmt.Errorf("window %q: start may not be 24:00", r.ID)
+	}
+	start, err := parseWindowTime(r.Start)
+	if err != nil {
+		return fmt.Errorf("window %q start: %w", r.ID, err)
+	}
+	end, err := parseWindowTime(r.End)
+	if err != nil {
+		return fmt.Errorf("window %q end: %w", r.ID, err)
+	}
+	if start >= end {
+		return fmt.Errorf("window %q: start must be before end", r.ID)
+	}
+	w.ID = r.ID
+	w.Start = start
+	w.End = end
+	return nil
+}
+
 type yamlConfig struct {
 	Server struct {
 		Listen string `yaml:"listen"`
@@ -97,7 +130,8 @@ type yamlConfig struct {
 		RadiusM *float64 `yaml:"radius_m"`
 		MaxAccM *float64 `yaml:"max_accuracy_m"`
 	} `yaml:"geofence"`
-	Window struct {
+	AttendanceWindows AttendanceWindows `yaml:"attendance_windows"`
+	Window            struct {
 		Start string `yaml:"start"`
 		End   string `yaml:"end"`
 	} `yaml:"window"`
@@ -125,9 +159,45 @@ func validateConfig(c Config) map[string]string {
 	if c.MaxAccM <= 0 {
 		errMap["geofence.max_accuracy_m"] = "must be > 0"
 	}
-	if c.WinStart >= c.WinEnd {
-		errMap["window.start"] = "must be before window.end"
-		errMap["window.end"] = "must be after window.start"
+	if c.WinStart > 0 || c.WinEnd > 0 {
+		if c.WinStart >= c.WinEnd {
+			errMap["window.start"] = "must be before window.end"
+			errMap["window.end"] = "must be after window.start"
+		}
+	}
+	seen := map[string]bool{}
+	for _, section := range []struct {
+		name    string
+		windows []AttendanceWindow
+	}{
+		{name: "in_windows", windows: c.AttendanceWindows.IN},
+		{name: "out_windows", windows: c.AttendanceWindows.OUT},
+	} {
+		for i, w := range section.windows {
+			if w.ID == "" {
+				errMap["attendance_windows."+section.name+"["+strconv.Itoa(i)+"].id"] = "id is required"
+				continue
+			}
+			if seen[w.ID] {
+				errMap["attendance_windows."+section.name+"["+strconv.Itoa(i)+"].id"] = "duplicate window id: " + w.ID
+				continue
+			}
+			seen[w.ID] = true
+			if w.Start == 24*60 {
+				errMap["attendance_windows."+section.name+"["+strconv.Itoa(i)+"].start"] = "start may not be 24:00"
+			}
+			if w.Start >= w.End || w.End > 24*60 {
+				errMap["attendance_windows."+section.name+"["+strconv.Itoa(i)+"].start"] = "start must be before end"
+			}
+		}
+		for i := 0; i < len(section.windows); i++ {
+			for j := i + 1; j < len(section.windows); j++ {
+				a, b := section.windows[i], section.windows[j]
+				if a.Start < b.End && b.Start < a.End {
+					errMap["attendance_windows."+section.name] = "windows overlap: " + a.ID + " and " + b.ID
+				}
+			}
+		}
 	}
 	if c.AdminListen != "" {
 		if len(c.AdminTokenSHA256) != 64 {
@@ -149,7 +219,7 @@ func validateConfig(c Config) map[string]string {
 }
 
 func loadConfig(path string, needGeo bool) (Config, error) {
-	c := Config{DBFile: "attendance.db", Listen: "127.0.0.1:8080", RadiusM: 150, MaxAccM: 50, WinStart: 9 * 60, WinEnd: 18 * 60, AuditRetentionDays: 180, AuditMaxRows: 500000}
+	c := Config{DBFile: "attendance.db", Listen: "127.0.0.1:8080", RadiusM: 150, MaxAccM: 50, AuditRetentionDays: 180, AuditMaxRows: 500000}
 	if path == "" {
 		path = "config.yaml"
 	}
@@ -184,13 +254,13 @@ func loadConfig(path string, needGeo bool) (Config, error) {
 		if y.Geofence.MaxAccM != nil {
 			c.MaxAccM = *y.Geofence.MaxAccM
 		}
-		if y.Window.Start != "" {
+		if len(y.AttendanceWindows.IN) > 0 || len(y.AttendanceWindows.OUT) > 0 {
+			c.AttendanceWindows = y.AttendanceWindows
+		} else if y.Window.Start != "" || y.Window.End != "" {
 			c.WinStart, err = parseWindowTime(y.Window.Start)
 			if err != nil {
 				return c, fmt.Errorf("window.start must be HH:MM or 24:00: %w", err)
 			}
-		}
-		if y.Window.End != "" {
 			c.WinEnd, err = parseWindowTime(y.Window.End)
 			if err != nil {
 				return c, fmt.Errorf("window.end must be HH:MM or 24:00: %w", err)

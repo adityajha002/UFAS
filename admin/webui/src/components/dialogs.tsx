@@ -5,7 +5,7 @@ import { Modal } from "./Modal";
 import { errText, useApp } from "../ctx";
 import { copyText } from "../lib/download";
 import { fmtDay } from "../lib/dates";
-import type { CodeIssued, ConfigHistoryItem } from "../types";
+import type { CodeIssued, ConfigHistoryItem, ExitRequestDetail } from "../types";
 
 function Err({ text }: { text?: string }) {
   return text ? <p className="field-err" role="alert">{text}</p> : null;
@@ -223,6 +223,126 @@ export function HistoryModal() {
               <tr key={h.id}><td>{h.at_ist}</td><td>{h.remote_ip ?? "-"}</td><td><Changes v={h.changes} /></td></tr>
             ))}</tbody>
           </table>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ---------- Early-exit request detail & approval ---------- */
+export function ExitRequestModal({
+  requestId,
+  employeeId,
+  name,
+}: {
+  requestId: string;
+  employeeId?: string;
+  name?: string;
+}) {
+  const { closeModal, notify, toast } = useApp();
+  const [detail, setDetail] = useState<ExitRequestDetail | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    api.exitRequest(requestId)
+      .then((d) => {
+        if (active) setDetail(d);
+      })
+      .catch((e) => {
+        if (active) setErr(errText(e));
+      });
+    return () => { active = false; };
+  }, [requestId]);
+
+  async function handleApprove() {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.approveExitRequest(requestId);
+      toast(`Allowed early exit for ${detail?.name ?? name ?? employeeId}`);
+      notify();
+      closeModal();
+    } catch (e) {
+      setErr(errText(e));
+      notify(); // refetch state so admin sees the latest truth
+      api.exitRequest(requestId).then((d) => setDetail(d)).catch(() => {});
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const isPending = detail ? detail.status === "pending" : true;
+  const facultyName = detail?.name ?? name ?? employeeId;
+  const facultyEmp = detail?.employee_id ?? employeeId;
+
+  return (
+    <Modal title="Early-exit request" onClose={closeModal}>
+      <Err text={err} />
+      {!detail && !err && <p className="muted">Loading request details…</p>}
+      {detail && (
+        <div className="exit-request-detail">
+          <p className="sub" style={{ marginTop: 0 }}>
+            <strong>{facultyName}</strong> {facultyEmp && <span className="muted">({facultyEmp})</span>}
+          </p>
+          <dl className="kv tight" style={{ margin: "10px 0" }}>
+            <dt>Status</dt>
+            <dd>
+              {detail.status === "pending" ? (
+                <span className="chip warn">Pending</span>
+              ) : (
+                <span className="chip ok">Approved</span>
+              )}
+            </dd>
+            <dt>Attendance state</dt>
+            <dd>
+              <strong>{detail.is_in === false ? "OUT" : "Currently IN"}</strong>
+            </dd>
+            <dt>Requested</dt>
+            <dd>{detail.requested_at_ist}</dd>
+            <dt>Distance</dt>
+            <dd>{detail.distance_m} m from center</dd>
+            <dt>GPS Accuracy</dt>
+            <dd>{Math.round(detail.accuracy_cm / 100)} m ({detail.accuracy_cm} cm)</dd>
+            {detail.approved_at_ist && (
+              <>
+                <dt>Approved at</dt>
+                <dd>{detail.approved_at_ist}</dd>
+              </>
+            )}
+            {detail.approved_by && (
+              <>
+                <dt>Approved by</dt>
+                <dd>{detail.approved_by}</dd>
+              </>
+            )}
+          </dl>
+
+          {isPending ? (
+            <>
+              <p className="note">Allow this faculty member to mark OUT now?</p>
+              <div className="dialog-actions">
+                <button type="button" className="btn ghost" disabled={busy} onClick={closeModal}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={busy}
+                  onClick={handleApprove}
+                >
+                  {busy ? "Approving…" : "Allow exit"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="dialog-actions">
+              <button type="button" className="btn ghost" onClick={closeModal}>
+                Close
+              </button>
+            </div>
+          )}
         </div>
       )}
     </Modal>

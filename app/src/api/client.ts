@@ -8,6 +8,17 @@ import type { AttendAction } from '../native/attendanceSecurity';
 export type Challenge = { challenge_id: string; nonce: string };
 export type RegisterResponse = { faculty_id: string; name?: string };
 export type AttendanceResponse = { ok?: boolean };
+export type WindowEntry = { id?: string; start: string; end: string };
+export type WindowStatus = {
+  open: boolean;
+  active?: WindowEntry | null;
+  next?: WindowEntry | null;
+};
+export type PendingExitRequest = {
+  id: string;
+  requested_at_ist: string;
+  status: 'pending' | 'approved';
+};
 export type HistoryResponse = {
   name: string;
   marked_today: boolean;
@@ -19,6 +30,9 @@ export type HistoryResponse = {
   is_in?: boolean;                 // an IN session is open now
   open_since_ist?: string | null;  // when that session started, IST
   today_worked_s?: number;         // closed sessions today, seconds
+  in_window?: WindowStatus | null;
+  out_window?: WindowStatus | null;
+  pending_exit_request?: PendingExitRequest | null;
   // Per-day status. Shape not known yet; src/lib/dayStatus.ts parseDayStatus() is the only reader.
   day_status?: unknown;
 };
@@ -32,6 +46,7 @@ export type AttendanceArgs = {
 // unknown `action` field with bad_request.
 export type { AttendAction };
 export type AttendanceV2Args = AttendanceArgs & { action: AttendAction };
+export type RequestOutArgs = AttendanceArgs;
 // PROVISIONAL: field names from APP_PLAN.md APP-1 step 3; check against 00_OVERVIEW.md §5.1
 // (not in the repo yet) and the SRV-2 handler.
 export type AttendanceV2Response = {
@@ -42,45 +57,74 @@ export type AttendanceV2Response = {
   is_in: boolean;         // state after this action
   today_worked_s: number; // closed sessions today, seconds
 };
+export type RequestOutResponse = {
+  id: string;
+  faculty_id: string;
+  day: string;
+  requested_at_ist: string;
+  status: 'pending';
+};
 export type HistoryArgs = { facultyId: string; challengeId: string; nonce: string; signature: string };
 
-export type ClientOptions = { baseUrl: string; fetchImpl?: typeof fetch; timeoutMs?: number };
+export type ClientOptions = {
+  baseUrl: string;
+  fallbackBaseUrls?: string[];
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+};
 
-export function createClient({ baseUrl, fetchImpl, timeoutMs = 10_000 }: ClientOptions) {
+export function createClient({ baseUrl, fallbackBaseUrls = [], fetchImpl, timeoutMs = 10_000 }: ClientOptions) {
   const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : true; // jest has no __DEV__
-  if (!/^https?:\/\//i.test(baseUrl)) {
-    throw new Error('API base URL must start with http:// or https://');
-  }
   const allowHttp = process.env.EXPO_PUBLIC_ALLOW_HTTP === '1'; // demo builds only
-  if (!isDev && !allowHttp && !/^https:\/\//i.test(baseUrl)) {
-    throw new Error('API base URL must use https:// in release builds');
+  const roots = [baseUrl, ...fallbackBaseUrls]
+    .map((u) => u.trim())
+    .filter((u) => u.length > 0)
+    .map((u) => u.replace(/\/+$/, ''))
+    .filter((u, i, arr) => arr.indexOf(u) === i);
+  if (roots.length === 0) {
+    throw new Error('At least one API base URL is required');
   }
-  const root = baseUrl.replace(/\/+$/, '');
+  for (const root of roots) {
+    if (!/^https?:\/\//i.test(root)) {
+      throw new Error('API base URL must start with http:// or https://');
+    }
+    if (!isDev && !allowHttp && !/^https:\/\//i.test(root)) {
+      throw new Error('API base URL must use https:// in release builds');
+    }
+  }
   const doFetch = fetchImpl ?? fetch;
 
   async function post<T>(path: string, body: unknown): Promise<T> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let res: Response;
-    try {
-      res = await doFetch(`${root}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-    } catch (e) {
-      throw new ApiError((e as Error)?.name === 'AbortError' ? 'timeout' : 'network');
-    } finally {
+    let lastTransportError: ApiError | null = null;
+    for (let i = 0; i < roots.length; i++) {
+      const root = roots[i];
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let res: Response;
+      try {
+        res = await doFetch(`${root}${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (e) {
+        lastTransportError = new ApiError((e as Error)?.name === 'AbortError' ? 'timeout' : 'network');
+        clearTimeout(timer);
+        // Try the next configured base URL only for transport-level failures.
+        if (i < roots.length - 1) continue;
+        throw lastTransportError;
+      }
       clearTimeout(timer);
+
+      let data: unknown = null;
+      try { data = await res.json(); } catch { /* non-JSON body */ }
+
+      if (!res.ok) throw mapServerError(res.status, data);
+      if (data === null || typeof data !== 'object') throw new ApiError('bad_response', res.status);
+      return data as T;
     }
-
-    let data: unknown = null;
-    try { data = await res.json(); } catch { /* non-JSON body */ }
-
-    if (!res.ok) throw mapServerError(res.status, data);
-    if (data === null || typeof data !== 'object') throw new ApiError('bad_response', res.status);
-    return data as T;
+    throw lastTransportError ?? new ApiError('network');
   }
 
   return {
@@ -100,6 +144,11 @@ export function createClient({ baseUrl, fetchImpl, timeoutMs = 10_000 }: ClientO
         action: a.action, faculty_id: a.facultyId, challenge_id: a.challengeId,
         lat_micro: a.latMicro, lon_micro: a.lonMicro, accuracy_cm: a.accuracyCm, signature: a.signature,
       }),
+    requestOut: (a: RequestOutArgs) =>
+      post<RequestOutResponse>('/attendance/request-out', {
+        faculty_id: a.facultyId, challenge_id: a.challengeId,
+        lat_micro: a.latMicro, lon_micro: a.lonMicro, accuracy_cm: a.accuracyCm, signature: a.signature,
+      }),
     history: (a: HistoryArgs) =>
       post<HistoryResponse>('/history', {
         faculty_id: a.facultyId, challenge_id: a.challengeId, signature: a.signature,
@@ -115,7 +164,11 @@ export function api(): ApiClient {
   if (!shared) {
     const baseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
     if (!baseUrl) throw new Error('EXPO_PUBLIC_API_BASE_URL is not set');
-    shared = createClient({ baseUrl });
+    const fallbackBaseUrls = (process.env.EXPO_PUBLIC_API_FALLBACK_BASE_URLS ?? '')
+      .split(',')
+      .map((u) => u.trim())
+      .filter((u) => u.length > 0);
+    shared = createClient({ baseUrl, fallbackBaseUrls });
   }
   return shared;
 }

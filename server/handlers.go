@@ -18,11 +18,23 @@ import (
 // Campus time is fixed UTC+5:30 (India has no daylight saving).
 var ist = time.FixedZone("IST", 5*3600+1800)
 
+type AttendanceWindow struct {
+	ID    string `yaml:"id"`
+	Start int    `yaml:"-"`
+	End   int    `yaml:"-"`
+}
+
+type AttendanceWindows struct {
+	IN  []AttendanceWindow `yaml:"in_windows"`
+	OUT []AttendanceWindow `yaml:"out_windows"`
+}
+
 type Config struct {
 	DBFile, Listen                   string
 	GeoLat, GeoLon                   float64
 	RadiusM, MaxAccM                 float64
-	WinStart, WinEnd                 int // minutes after midnight, campus time
+	WinStart, WinEnd                 int // deprecated legacy single-window fallback
+	AttendanceWindows                AttendanceWindows
 	AdminListen, AdminTokenSHA256    string
 	AuditRetentionDays, AuditMaxRows int
 }
@@ -104,6 +116,10 @@ var errTable = map[string]struct {
 	"poor_accuracy":       {422, "GPS accuracy is too low"},
 	"outside_area":        {422, "you are outside the allowed area"},
 	"already_marked":      {409, "already marked today"},
+	"already_in":          {409, "already in"},
+	"not_in":              {409, "not in"},
+	"request_pending":     {409, "an early-exit request is already pending"},
+	"out_window_open":     {409, "the OUT window is open now; use MARK OUT instead"},
 	"too_many_challenges": {429, "too many open challenges"},
 }
 
@@ -232,6 +248,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /register", s.wrap("register", s.register))
 	mux.HandleFunc("POST /challenge", s.wrap("challenge", s.challenge))
 	mux.HandleFunc("POST /attendance", s.wrap("attendance", s.attendance))
+	mux.HandleFunc("POST /attendance/request-out", s.wrap("attendance_request_out", s.requestOut))
 	mux.HandleFunc("POST /history", s.wrap("history", s.history))
 	mux.HandleFunc("POST /server/shutdown", s.wrap("server_shutdown", s.shutdownServer))
 	mux.HandleFunc("POST /admin/api/server/shutdown", s.wrap("server_shutdown", s.shutdownServer))
@@ -247,12 +264,15 @@ func (s *Server) adminRoutes() http.Handler {
 
 // ---- policy ----
 
-func windowOpenAt(now time.Time, cfg Config) bool {
-	t := now.In(ist)
-	m := t.Hour()*60 + t.Minute()
+func legacyWindowOpenAt(now time.Time, cfg Config) bool {
 	if cfg.WinStart == 0 && cfg.WinEnd == 24*60 {
 		return true
 	}
+	if cfg.WinEnd == 0 {
+		return false
+	}
+	t := now.In(ist)
+	m := t.Hour()*60 + t.Minute()
 	if wd := t.Weekday(); wd == time.Saturday || wd == time.Sunday {
 		return false
 	}
@@ -260,6 +280,59 @@ func windowOpenAt(now time.Time, cfg Config) bool {
 		return m >= cfg.WinStart
 	}
 	return m >= cfg.WinStart && m < cfg.WinEnd
+}
+
+func isWindowOpenAtMinute(minute int, w AttendanceWindow) bool {
+	if w.Start == 0 && w.End == 24*60 {
+		return true
+	}
+	if w.Start < 0 || w.End <= w.Start || w.Start >= 24*60 || w.End > 24*60 {
+		return false
+	}
+	return w.Start <= minute && minute < w.End
+}
+
+func actionWindowOpenAt(now time.Time, cfg Config, action string) bool {
+	windows := cfg.AttendanceWindows.IN
+	if action == "out" {
+		windows = cfg.AttendanceWindows.OUT
+	}
+	if len(windows) > 0 {
+		local := now.In(ist)
+		minute := local.Hour()*60 + local.Minute()
+		for _, w := range windows {
+			if isWindowOpenAtMinute(minute, w) {
+				return true
+			}
+		}
+		return false
+	}
+	return legacyWindowOpenAt(now, cfg)
+}
+
+func actionWindowAt(now time.Time, cfg Config, action string) (AttendanceWindow, bool) {
+	windows := cfg.AttendanceWindows.IN
+	if action == "out" {
+		windows = cfg.AttendanceWindows.OUT
+	}
+	if len(windows) == 0 {
+		return AttendanceWindow{}, false
+	}
+	local := now.In(ist)
+	minute := local.Hour()*60 + local.Minute()
+	for _, w := range windows {
+		if isWindowOpenAtMinute(minute, w) {
+			return w, true
+		}
+	}
+	return AttendanceWindow{}, false
+}
+
+func windowOpenAt(now time.Time, cfg Config) bool {
+	if len(cfg.AttendanceWindows.IN) > 0 || len(cfg.AttendanceWindows.OUT) > 0 {
+		return actionWindowOpenAt(now, cfg, "in") || actionWindowOpenAt(now, cfg, "out")
+	}
+	return legacyWindowOpenAt(now, cfg)
 }
 
 type windowInfo struct {
@@ -289,6 +362,41 @@ func (s *Server) windowState(now time.Time, cfg Config) windowInfo {
 }
 
 func (s *Server) windowOpen(now time.Time) bool { return windowOpenAt(now, s.config()) }
+
+func encodeWindow(day time.Time, w AttendanceWindow) map[string]any {
+	startT := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location()).Add(time.Duration(w.Start) * time.Minute)
+	endT := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location()).Add(time.Duration(w.End) * time.Minute)
+	return map[string]any{"id": w.ID, "start": startT.Format("15:04"), "end": endT.Format("15:04")}
+}
+
+func windowStatus(now time.Time, cfg Config, action string) map[string]any {
+	windows := cfg.AttendanceWindows.IN
+	if action == "out" {
+		windows = cfg.AttendanceWindows.OUT
+	}
+	day := now.In(ist)
+	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
+	minute := day.Hour()*60 + day.Minute()
+	out := map[string]any{"open": false, "active": nil, "next": nil}
+	if len(windows) == 0 {
+		out["open"] = actionWindowOpenAt(now, cfg, action)
+		return out
+	}
+	for _, w := range windows {
+		if isWindowOpenAtMinute(minute, w) {
+			out["open"] = true
+			out["active"] = encodeWindow(dayStart, w)
+			return out
+		}
+	}
+	for _, w := range windows {
+		if w.Start > minute {
+			out["next"] = encodeWindow(dayStart, w)
+			return out
+		}
+	}
+	return out
+}
 
 func haversineM(lat1, lon1, lat2, lon2 float64) float64 {
 	const earthR = 6371000.0
@@ -426,6 +534,7 @@ func (s *Server) challenge(w http.ResponseWriter, r *http.Request) (int, any, er
 
 func (s *Server) attendance(w http.ResponseWriter, r *http.Request) (int, any, error) {
 	var req struct {
+		Action      string `json:"action"`
 		ChallengeID string `json:"challenge_id"`
 		FacultyID   string `json:"faculty_id"`
 		LatMicro    int64  `json:"lat_micro"`
@@ -442,7 +551,9 @@ func (s *Server) attendance(w http.ResponseWriter, r *http.Request) (int, any, e
 	audit.LatMicro = &req.LatMicro
 	audit.LonMicro = &req.LonMicro
 	audit.AccuracyCm = &req.AccuracyCm
-	// 1. field ranges
+	if req.Action != "" && req.Action != "in" && req.Action != "out" {
+		return 0, nil, apiErr{"bad_request"}
+	}
 	if req.ChallengeID == "" || req.FacultyID == "" || req.Signature == "" ||
 		req.LatMicro < -90_000_000 || req.LatMicro > 90_000_000 ||
 		req.LonMicro < -180_000_000 || req.LonMicro > 180_000_000 ||
@@ -456,16 +567,97 @@ func (s *Server) attendance(w http.ResponseWriter, r *http.Request) (int, any, e
 	dist := haversineM(float64(req.LatMicro)/1e6, float64(req.LonMicro)/1e6, cfg.GeoLat, cfg.GeoLon)
 	audit.DistanceM = new(int64)
 	*audit.DistanceM = int64(math.Round(dist))
-	// 2-3. challenge exists, is owned, unused, unexpired; faculty has a key
 	nonce, pub, err := checkChallenge(ctx, s.db, req.ChallengeID, req.FacultyID, nowU)
 	if err != nil {
 		return 0, nil, err
 	}
-	// 4. signature over the string rebuilt from the stored nonce
+	if req.Action != "" {
+		if !verifySig(pub, attendMsgV2(req.Action, req.ChallengeID, nonce, req.FacultyID, req.LatMicro, req.LonMicro, req.AccuracyCm), req.Signature) {
+			return 0, nil, apiErr{"bad_signature"}
+		}
+		if !actionWindowOpenAt(now, cfg, req.Action) {
+			return 0, nil, apiErr{"closed"}
+		}
+		if req.AccuracyCm > int64(cfg.MaxAccM*100) {
+			return 0, nil, apiErr{"poor_accuracy"}
+		}
+		if dist > cfg.RadiusM {
+			return 0, nil, apiErr{"outside_area"}
+		}
+		day := now.In(ist).Format("2006-01-02")
+		distM := int64(math.Round(dist))
+		var stateIsIn bool
+		var todayWorkedS int64
+		err = withTx(ctx, s.db, func(tx *sql.Tx) error {
+			if err := consumeChallenge(ctx, tx, req.ChallengeID, nowU); err != nil {
+				return err
+			}
+			if req.Action == "in" {
+				var inState int
+				var previousWorked int64
+				err = tx.QueryRowContext(ctx, `SELECT is_in, today_worked_s FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, day).Scan(&inState, &previousWorked)
+				switch {
+				case errors.Is(err, sql.ErrNoRows):
+					_, err = tx.ExecContext(ctx, `INSERT INTO attendance_state (faculty_id, day, is_in, started_at, today_worked_s, updated_at) VALUES (?, ?, 1, ?, 0, ?)`, req.FacultyID, day, nowU, nowU)
+					if err != nil {
+						return err
+					}
+					stateIsIn = true
+					todayWorkedS = 0
+				case err != nil:
+					return err
+				case inState == 1:
+					return apiErr{"already_in"}
+				default:
+					_, err = tx.ExecContext(ctx, `UPDATE attendance_state SET is_in=1, started_at=?, today_worked_s=?, updated_at=? WHERE faculty_id=? AND day=?`, nowU, previousWorked, nowU, req.FacultyID, day)
+					if err != nil {
+						return err
+					}
+					stateIsIn = true
+					todayWorkedS = previousWorked
+				}
+			} else {
+				var inState int
+				var startedAt sql.NullInt64
+				var previousWorked int64
+				err = tx.QueryRowContext(ctx, `SELECT is_in, started_at, today_worked_s FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, day).Scan(&inState, &startedAt, &previousWorked)
+				switch {
+				case errors.Is(err, sql.ErrNoRows):
+					return apiErr{"not_in"}
+				case err != nil:
+					return err
+				case inState == 0:
+					return apiErr{"not_in"}
+				case !startedAt.Valid:
+					return apiErr{"not_in"}
+				default:
+					elapsed := nowU - startedAt.Int64
+					newWorked := previousWorked + elapsed
+					_, err = tx.ExecContext(ctx, `UPDATE attendance_state SET is_in=0, started_at=NULL, today_worked_s=?, updated_at=? WHERE faculty_id=? AND day=?`, newWorked, nowU, req.FacultyID, day)
+					if err != nil {
+						return err
+					}
+					stateIsIn = false
+					todayWorkedS = newWorked
+				}
+			}
+			_, err = tx.ExecContext(ctx, `INSERT INTO attendance (faculty_id, day, marked_at, lat_micro, lon_micro, accuracy_cm, distance_m)
+				VALUES (?,?,?,?,?,?,?)
+				ON CONFLICT(faculty_id, day) DO UPDATE SET marked_at=excluded.marked_at, lat_micro=excluded.lat_micro, lon_micro=excluded.lon_micro, accuracy_cm=excluded.accuracy_cm, distance_m=excluded.distance_m`,
+				req.FacultyID, day, nowU, req.LatMicro, req.LonMicro, req.AccuracyCm, distM)
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			return 0, nil, err
+		}
+		return 201, map[string]any{"action": req.Action, "day": day, "at_ist": now.In(ist).Format(time.RFC3339), "distance_m": distM, "is_in": stateIsIn, "today_worked_s": todayWorkedS}, nil
+	}
 	if !verifySig(pub, attendMsg(req.ChallengeID, nonce, req.FacultyID, req.LatMicro, req.LonMicro, req.AccuracyCm), req.Signature) {
 		return 0, nil, apiErr{"bad_signature"}
 	}
-	// 5. policy (nothing has changed yet, so the phone may retry on this challenge)
 	if !windowOpenAt(now, cfg) {
 		return 0, nil, apiErr{"closed"}
 	}
@@ -475,7 +667,6 @@ func (s *Server) attendance(w http.ResponseWriter, r *http.Request) (int, any, e
 	if dist > cfg.RadiusM {
 		return 0, nil, apiErr{"outside_area"}
 	}
-	// 6. one transaction: consume the challenge and write the record
 	day := now.In(ist).Format("2006-01-02")
 	distM := int64(math.Round(dist))
 	err = withTx(ctx, s.db, func(tx *sql.Tx) error {
@@ -490,7 +681,7 @@ func (s *Server) attendance(w http.ResponseWriter, r *http.Request) (int, any, e
 			return err
 		}
 		if n, _ := res.RowsAffected(); n != 1 {
-			return apiErr{"already_marked"} // rolls back, challenge stays unused
+			return apiErr{"already_marked"}
 		}
 		return nil
 	})
@@ -498,6 +689,99 @@ func (s *Server) attendance(w http.ResponseWriter, r *http.Request) (int, any, e
 		return 0, nil, err
 	}
 	return 201, map[string]any{"day": day, "distance_m": distM}, nil
+}
+
+// ---- POST /attendance/request-out ----
+
+func (s *Server) requestOut(w http.ResponseWriter, r *http.Request) (int, any, error) {
+	var req struct {
+		ChallengeID string `json:"challenge_id"`
+		FacultyID   string `json:"faculty_id"`
+		LatMicro    int64  `json:"lat_micro"`
+		LonMicro    int64  `json:"lon_micro"`
+		AccuracyCm  int64  `json:"accuracy_cm"`
+		Signature   string `json:"signature"`
+	}
+	if err := decode(w, r, &req); err != nil {
+		return 0, nil, err
+	}
+	audit := auditFrom(r.Context())
+	audit.FacultyID = req.FacultyID
+	audit.ChallengeID = req.ChallengeID
+	audit.LatMicro = &req.LatMicro
+	audit.LonMicro = &req.LonMicro
+	audit.AccuracyCm = &req.AccuracyCm
+	if req.ChallengeID == "" || req.FacultyID == "" || req.Signature == "" ||
+		req.LatMicro < -90_000_000 || req.LatMicro > 90_000_000 ||
+		req.LonMicro < -180_000_000 || req.LonMicro > 180_000_000 ||
+		req.AccuracyCm < 0 || req.AccuracyCm > 1_000_000_000 {
+		return 0, nil, apiErr{"bad_request"}
+	}
+	cfg := s.config()
+	now := s.now()
+	nowU := now.Unix()
+	ctx := r.Context()
+	dist := haversineM(float64(req.LatMicro)/1e6, float64(req.LonMicro)/1e6, cfg.GeoLat, cfg.GeoLon)
+	audit.DistanceM = new(int64)
+	*audit.DistanceM = int64(math.Round(dist))
+	if req.AccuracyCm > int64(cfg.MaxAccM*100) {
+		return 0, nil, apiErr{"poor_accuracy"}
+	}
+	if dist > cfg.RadiusM {
+		return 0, nil, apiErr{"outside_area"}
+	}
+	nonce, pub, err := checkChallenge(ctx, s.db, req.ChallengeID, req.FacultyID, nowU)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !verifySig(pub, attendMsgV2("request_out", req.ChallengeID, nonce, req.FacultyID, req.LatMicro, req.LonMicro, req.AccuracyCm), req.Signature) {
+		return 0, nil, apiErr{"bad_signature"}
+	}
+	if actionWindowOpenAt(now, cfg, "out") {
+		return 0, nil, apiErr{"out_window_open"}
+	}
+	day := now.In(ist).Format("2006-01-02")
+	var inState int
+	var requestID string
+	err = withTx(ctx, s.db, func(tx *sql.Tx) error {
+		var pendingID string
+		err = tx.QueryRowContext(ctx, `SELECT id FROM exit_requests WHERE faculty_id=? AND day=? AND status='pending' LIMIT 1`, req.FacultyID, day).Scan(&pendingID)
+		switch {
+		case err == nil:
+			return apiErr{"request_pending"}
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT is_in FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, day).Scan(&inState); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return apiErr{"not_in"}
+			}
+			return err
+		}
+		if inState == 0 {
+			return apiErr{"not_in"}
+		}
+		if err := consumeChallenge(ctx, tx, req.ChallengeID, nowU); err != nil {
+			return err
+		}
+		requestID = randHex(16)
+		_, err = tx.ExecContext(ctx, `INSERT INTO exit_requests (id, faculty_id, day, requested_at, lat_micro, lon_micro, accuracy_cm, distance_m, challenge_id, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`, requestID, req.FacultyID, day, nowU, req.LatMicro, req.LonMicro, req.AccuracyCm, int64(math.Round(dist)), req.ChallengeID)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	return 201, map[string]any{
+		"id":               requestID,
+		"faculty_id":       req.FacultyID,
+		"day":              day,
+		"requested_at_ist": now.In(ist).Format(time.RFC3339),
+		"status":           "pending",
+	}, nil
 }
 
 // ---- POST /history ----
@@ -522,9 +806,17 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) (int, any, erro
 	todayT := now.In(ist)
 	today := todayT.Format("2006-01-02")
 	from := twoMonthsBack(todayT).Format("2006-01-02")
+	cfg := s.config()
 
 	var name string
 	days := []string{}
+	var isIn bool
+	var openSince string
+	var todayWorkedS int64
+	var inWindowOpen bool
+	var outWindowOpen bool
+	var nextAction string
+	var pendingReq map[string]any
 	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
 		nonce, pub, err := checkChallenge(ctx, tx, req.ChallengeID, req.FacultyID, nowU)
 		if err != nil {
@@ -539,8 +831,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) (int, any, erro
 		if err := tx.QueryRowContext(ctx, `SELECT name FROM faculty WHERE id=?`, req.FacultyID).Scan(&name); err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT day FROM attendance
-			WHERE faculty_id=? AND day>=? AND day<=? ORDER BY day DESC`, req.FacultyID, from, today)
+		rows, err := tx.QueryContext(ctx, `SELECT day FROM attendance WHERE faculty_id=? AND day>=? AND day<=? ORDER BY day DESC`, req.FacultyID, from, today)
 		if err != nil {
 			return err
 		}
@@ -552,17 +843,73 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) (int, any, erro
 			}
 			days = append(days, d)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		var startedAt sql.NullInt64
+		var worked int64
+		err = tx.QueryRowContext(ctx, `SELECT is_in, started_at, today_worked_s FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, today).Scan(&isIn, &startedAt, &worked)
+		switch {
+		case err == nil:
+			if isIn && startedAt.Valid {
+				openSince = time.Unix(startedAt.Int64, 0).In(ist).Format(time.RFC3339)
+				todayWorkedS = worked + nowU - startedAt.Int64
+			} else {
+				todayWorkedS = worked
+			}
+		case errors.Is(err, sql.ErrNoRows):
+			isIn = false
+			openSince = ""
+		default:
+			return err
+		}
+		var pendingID, pendingStatus string
+		var pendingAt int64
+		err = tx.QueryRowContext(ctx, `SELECT id, requested_at, status FROM exit_requests WHERE faculty_id=? AND day=? AND status='pending' ORDER BY requested_at DESC LIMIT 1`, req.FacultyID, today).Scan(&pendingID, &pendingAt, &pendingStatus)
+		switch {
+		case err == nil:
+			pendingReq = map[string]any{
+				"id":               pendingID,
+				"requested_at_ist": time.Unix(pendingAt, 0).In(ist).Format(time.RFC3339),
+				"status":           pendingStatus,
+			}
+		case errors.Is(err, sql.ErrNoRows):
+			pendingReq = nil
+		default:
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return 0, nil, err
 	}
+	inWindowOpen = actionWindowOpenAt(now, cfg, "in")
+	outWindowOpen = actionWindowOpenAt(now, cfg, "out")
+	nextAction = "in"
+	if isIn {
+		nextAction = "out"
+	}
+	windowOpen := actionWindowOpenAt(now, cfg, nextAction)
+	activeWindow := map[string]any(nil)
+	if w, ok := actionWindowAt(now, cfg, nextAction); ok {
+		activeWindow = map[string]any{"id": w.ID, "start": time.Date(todayT.Year(), todayT.Month(), todayT.Day(), 0, 0, 0, 0, todayT.Location()).Add(time.Duration(w.Start) * time.Minute).Format("15:04"), "end": time.Date(todayT.Year(), todayT.Month(), todayT.Day(), 0, 0, 0, 0, todayT.Location()).Add(time.Duration(w.End) * time.Minute).Format("15:04")}
+	}
 	markedToday := len(days) > 0 && days[0] == today
 	return 200, map[string]any{
-		"name":         name,
-		"today":        today,
-		"marked_today": markedToday,
-		"window_open":  s.windowOpen(now),
-		"days":         days,
+		"name":                 name,
+		"today":                today,
+		"marked_today":         markedToday,
+		"window_open":          windowOpen,
+		"in_window_open":       inWindowOpen,
+		"out_window_open":      outWindowOpen,
+		"next_action":          nextAction,
+		"active_window":        activeWindow,
+		"in_window":            windowStatus(now, cfg, "in"),
+		"out_window":           windowStatus(now, cfg, "out"),
+		"pending_exit_request": pendingReq,
+		"is_in":                isIn,
+		"open_since_ist":       openSince,
+		"today_worked_s":       todayWorkedS,
+		"days":                 days,
 	}, nil
 }

@@ -377,6 +377,56 @@ func TestConcurrentSubmitsOneRecord(t *testing.T) {
 	}
 }
 
+func TestRequestOutPending(t *testing.T) {
+	e := newEnv(t)
+	e.s.setConfig(Config{
+		GeoLat: 28.6139, GeoLon: 77.2090, RadiusM: 150, MaxAccM: 50,
+		AttendanceWindows: AttendanceWindows{
+			IN:  []AttendanceWindow{{ID: "in-morning", Start: 9 * 60, End: 10 * 60}},
+			OUT: []AttendanceWindow{{ID: "out-evening", Start: 16 * 60, End: 17 * 60}},
+		},
+	})
+	p := e.enroll("F001", "Dr. Rao")
+	e.setClock(time.Date(2026, 10, 23, 9, 30, 0, 0, ist))
+
+	cid, nonce := p.challenge()
+	st, out := e.post("/attendance", map[string]any{
+		"action": "in", "faculty_id": p.facultyID, "challenge_id": cid,
+		"lat_micro": geoLatMicro, "lon_micro": geoLonMicro, "accuracy_cm": 1500,
+		"signature": p.sign(attendMsgV2("in", cid, nonce, p.facultyID, geoLatMicro, geoLonMicro, 1500)),
+	})
+	if st != 201 || out["is_in"] != true {
+		t.Fatalf("mark in: %d %v", st, out)
+	}
+
+	cid, nonce = p.challenge()
+	st, out = e.post("/attendance/request-out", map[string]any{
+		"faculty_id": p.facultyID, "challenge_id": cid,
+		"lat_micro": geoLatMicro, "lon_micro": geoLonMicro, "accuracy_cm": 1500,
+		"signature": p.sign(attendMsgV2("request_out", cid, nonce, p.facultyID, geoLatMicro, geoLonMicro, 1500)),
+	})
+	if st != 201 || out["status"] != "pending" {
+		t.Fatalf("request out: %d %v", st, out)
+	}
+
+	st, out = p.history()
+	if st != 200 {
+		t.Fatalf("history after request: %d %v", st, out)
+	}
+	pending, ok := out["pending_exit_request"].(map[string]any)
+	if !ok || pending["status"] != "pending" {
+		t.Fatalf("history should include pending_exit_request: %v", out["pending_exit_request"])
+	}
+
+	cid, nonce = p.challenge()
+	st, out = e.post("/attendance/request-out", map[string]any{
+		"faculty_id": p.facultyID, "challenge_id": cid,
+		"lat_micro": geoLatMicro, "lon_micro": geoLonMicro, "accuracy_cm": 1500,
+		"signature": p.sign(attendMsgV2("request_out", cid, nonce, p.facultyID, geoLatMicro, geoLonMicro, 1500)),
+	})
+	e.wantErr(st, out, "request_pending", 409)
+}
+
 func TestEnrollment(t *testing.T) {
 	e := newEnv(t)
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

@@ -117,3 +117,23 @@ describe('todayLine', () => {
     expect(todayLine(null, true)).toBeNull();
   });
 });
+
+describe('multi-window request-out logic', () => {
+  const multi: HistoryResponse = {
+    ...IN_NOW,
+    in_window: { open: true, active: { id: 'in-1', start: '09:00', end: '10:00' }, next: null },
+    out_window: { open: false, active: null, next: { id: 'out-2', start: '16:00', end: '17:00' } },
+    pending_exit_request: { id: 'r-1', requested_at_ist: '2026-11-10T12:15:00+05:30', status: 'pending' },
+  };
+
+  it('IN + closed OUT window offers request_out while a pending request blocks duplicate sends', () => {
+    expect(inOutBase(multi, true)).toEqual({ state: 'closed', action: 'request_out', pending: true });
+    expect(inOutButton({ state: 'closed', action: 'request_out', pending: true }, false, 'ready')).toEqual({ state: 'marked', label: 'EXIT REQUEST PENDING' });
+    expect(inOutMessage({ state: 'closed', action: 'request_out', pending: true }, 'ready', null, null)).toMatch(/pending/i);
+  });
+
+  it('shows schedule info for IN and OUT windows', () => {
+    expect(multi.in_window?.open).toBe(true);
+    expect(multi.out_window?.next?.start).toBe('16:00');
+  });
+});

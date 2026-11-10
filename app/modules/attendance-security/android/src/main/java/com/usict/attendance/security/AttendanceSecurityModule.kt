@@ -68,6 +68,14 @@ class AttendanceSecurityModule : Module() {
             mapOf("signature" to Signer.sign(payload.toByteArray(Charsets.UTF_8)))
         }
 
+        AsyncFunction("signRequestOut") { f: AttendanceFieldsRecord ->
+            val payload = PayloadBuilder.requestOut(
+                f.challengeId, f.nonce, f.facultyId,
+                f.latMicro.toLong(), f.lonMicro.toLong(), f.accuracyCm.toLong(),
+            )
+            mapOf("signature" to Signer.sign(payload.toByteArray(Charsets.UTF_8)))
+        }
+
         AsyncFunction("signHistory") { f: HistoryFieldsRecord ->
             val payload = PayloadBuilder.history(f.challengeId, f.nonce, f.facultyId)
             mapOf("signature" to Signer.sign(payload.toByteArray(Charsets.UTF_8)))

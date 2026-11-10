@@ -1,11 +1,12 @@
 import { requireNativeModule } from 'expo-modules-core';
 import {
-  attendV1Payload, attendV2Payload, historyPayload,
+  attendRequestOutPayload, attendV1Payload, attendV2Payload, historyPayload,
   type AttendAction, type AttendanceFields, type AttendanceV2Fields, type HistoryFields,
+  type RequestOutAction, type RequestOutFields,
 } from './payload';
 
-export type { AttendAction, AttendanceFields, AttendanceV2Fields, HistoryFields };
-export { attendV2Payload, ATTEND_ACTIONS } from './payload';
+export type { AttendAction, AttendanceFields, AttendanceV2Fields, HistoryFields, RequestOutAction, RequestOutFields };
+export { attendRequestOutPayload, attendV2Payload, ATTEND_ACTIONS, REQUEST_OUT_ACTION } from './payload';
 
 export type SecurityLevel = 'strongbox' | 'trusted_environment' | 'software';
 export type KeyInfo = { securityLevel: SecurityLevel };
@@ -18,6 +19,8 @@ export interface AttendanceSecurity {
   signAttendance(f: AttendanceFields): Promise<{ signature: string }>;
   /** v2 (IN/OUT). Rejects any action other than "in"/"out". */
   signAttendanceV2(f: AttendanceV2Fields): Promise<{ signature: string }>;
+  /** Special early-exit request using the same challenge/location flow as attendance. */
+  signRequestOut(f: RequestOutFields): Promise<{ signature: string }>;
   signHistory(f: HistoryFields): Promise<{ signature: string }>;
   deleteKey(): Promise<void>;
 }
@@ -58,6 +61,7 @@ const fallback: AttendanceSecurity = {
   },
   async signAttendance(f) { return softSign(attendV1Payload(f)); },
   async signAttendanceV2(f) { return softSign(attendV2Payload(f)); },
+  async signRequestOut(f) { return softSign(attendRequestOutPayload(f)); },
   async signHistory(f) { return softSign(historyPayload(f)); },
   async deleteKey() { keyPair = null; },
 };

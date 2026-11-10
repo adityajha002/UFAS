@@ -68,6 +68,9 @@ small, .small { font-size: 12px; }
 .pill-row .time { font-variant-numeric: tabular-nums; }
 .pill-row.dim { background: transparent; border: 1px dashed var(--pill); }
 .pill-row.dim .name { font-style: normal; font-weight: 500; }
+.pill-row.pending-exit { background: #fae498; border: 1px solid #c9b05c; cursor: pointer; }
+.pill-row.pending-exit:hover { filter: brightness(.95); }
+.exit-request-detail { display: flex; flex-direction: column; gap: 8px; }
 .rows.absent { margin-top: 8px; }
 .datenav { display: flex; align-items: center; gap: 4px; }
 .datebtn { position: relative; font-weight: 600; padding: 2px 8px; background: var(--pill); border-radius: 6px; cursor: pointer; white-space: nowrap; }

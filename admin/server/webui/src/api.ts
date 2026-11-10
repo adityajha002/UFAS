@@ -1,5 +1,5 @@
 import type {
-  ActionPage, AuditPage, CodeIssued, ConfigBody, ConfigHistoryItem, Day, FacultyList,
+  ActionPage, AuditPage, CodeIssued, ConfigBody, ConfigHistoryItem, Day, ExitRequestDetail, FacultyList,
   Status, UserAttendance,
 } from "./types";
 
@@ -96,6 +96,15 @@ export const api = {
   deleteFaculty: (emp: string) => call<{ employee_id: string; deleted: boolean }>("DELETE", `/faculty/${enc(emp)}`),
   markManual: (employee_id: string, date: string, note: string) =>
     call<{ employee_id: string; date: string }>("POST", "/attendance/manual", { body: { employee_id, date, note } }),
+  exitRequests: (q?: { date?: string; status?: "pending" | "approved" | "all" }) =>
+    call<{ items: ExitRequestDetail[] }>("GET", "/exit-requests", { query: q }),
+  exitRequest: (requestId: string) =>
+    call<ExitRequestDetail>("GET", `/exit-requests/${enc(requestId)}`),
+  approveExitRequest: (requestId: string) =>
+    call<{
+      id: string; employee_id: string; status: string;
+      approved_at_ist: string; out_at_ist: string; session_s: number; today_worked_s: number; is_in: boolean;
+    }>("POST", `/exit-requests/${enc(requestId)}/approve`, { body: {} }),
   config: () => call<ConfigBody>("GET", "/config"),
   patchConfig: (patch: unknown, dryRun = false) =>
     call<ConfigBody>("PATCH", "/config", { body: patch, query: { dry_run: dryRun ? "true" : undefined } }),

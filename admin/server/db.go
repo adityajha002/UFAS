@@ -83,6 +83,35 @@ CREATE TABLE IF NOT EXISTS admin_actions (
   remote_ip TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_admin_actions_ts ON admin_actions(ts);
+CREATE TABLE IF NOT EXISTS attendance_state (
+  faculty_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  is_in INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER,
+  today_worked_s INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (faculty_id, day)
+);
+CREATE TABLE IF NOT EXISTS exit_requests (
+  id              TEXT PRIMARY KEY,
+  faculty_id      TEXT NOT NULL,
+  day             TEXT NOT NULL,
+  requested_at    INTEGER NOT NULL,
+  lat_micro       INTEGER NOT NULL,
+  lon_micro       INTEGER NOT NULL,
+  accuracy_cm     INTEGER NOT NULL,
+  distance_m      INTEGER NOT NULL,
+  challenge_id    TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  approved_at     INTEGER,
+  approved_by     TEXT,
+  attendance_day  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_exit_requests_faculty_day ON exit_requests(faculty_id, day);
+CREATE INDEX IF NOT EXISTS idx_exit_requests_pending ON exit_requests(status, requested_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_pending_exit_request
+ON exit_requests(faculty_id, day)
+WHERE status = 'pending';
 CREATE VIEW IF NOT EXISTS attendance_report AS
   SELECT f.employee_id, f.name, a.day,
          datetime(a.marked_at, 'unixepoch', '+5 hours', '+30 minutes') AS marked_at_ist,

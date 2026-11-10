@@ -1,7 +1,9 @@
 // Pure IN/OUT (v2) screen logic, kept free of React so it can be unit-tested.
-import type { AttendAction, AttendanceV2Response, HistoryResponse } from '../api/client';
+import type { AttendanceV2Response, HistoryResponse, WindowStatus } from '../api/client';
 import type { HistoryStatus } from './historyView';
 import type { MarkState } from './markState';
+
+type InOutAction = 'in' | 'out' | 'request_out';
 
 /**
  * Which marking flow the screen uses, decided only by /history fetched in this session
@@ -18,11 +20,28 @@ export function markMode(data: HistoryResponse | null, fresh: boolean): MarkMode
 }
 
 /** What the server last said: which action the button offers, and whether the window is open. */
-export type InOutBase = { state: 'idle' | 'closed' | 'unknown'; action: AttendAction | null };
+export type InOutBase = { state: 'idle' | 'closed' | 'unknown'; action: InOutAction | null; pending?: boolean };
+
+function isPendingRequest(data: HistoryResponse | null): boolean {
+  return data?.pending_exit_request?.status === 'pending';
+}
+
+function windowOpen(window: WindowStatus | null | undefined): boolean {
+  return !!window && window.open;
+}
 
 export function inOutBase(data: HistoryResponse | null, fresh: boolean): InOutBase {
   if (!data || markMode(data, fresh) !== 'v2') return { state: 'unknown', action: null };
-  return { state: data.window_open ? 'idle' : 'closed', action: data.is_in ? 'out' : 'in' };
+  if (isPendingRequest(data)) return { state: 'closed', action: 'request_out', pending: true };
+  if (!data.is_in) {
+    const inOpen = data.in_window ? windowOpen(data.in_window) : data.window_open;
+    return { state: inOpen ? 'idle' : 'closed', action: 'in' };
+  }
+  if (data.out_window) {
+    if (windowOpen(data.out_window)) return { state: 'idle', action: 'out' };
+    return { state: 'closed', action: 'request_out' };
+  }
+  return { state: data.window_open ? 'idle' : 'closed', action: 'out' };
 }
 
 /** Button look. Unknown state: spinner while the first /history is loading, otherwise disabled. */
@@ -30,9 +49,11 @@ export function inOutButton(
   base: InOutBase, busy: boolean, historyStatus: HistoryStatus,
 ): { state: MarkState; label?: string } {
   if (busy) return { state: 'working' };
+  if (base.pending) return { state: 'marked', label: 'EXIT REQUEST PENDING' };
   if (base.state === 'unknown' || !base.action) {
     return { state: historyStatus === 'loading' ? 'working' : 'unknown' };
   }
+  if (base.action === 'request_out') return { state: base.state === 'closed' ? 'closed' : 'idle', label: 'REQUEST OUT' };
   return { state: base.state, label: base.action === 'in' ? 'MARK IN' : 'MARK OUT' };
 }
 
@@ -42,6 +63,8 @@ export function inOutMessage(
 ): string | undefined {
   if (stage) return stage;
   if (notice) return notice;
+  if (base.pending) return 'Exit request is pending — waiting for admin approval.';
+  if (base.action === 'request_out') return 'OUT is closed. You can request an early exit for admin approval.';
   if (base.state === 'closed') return 'Attendance is not open right now';
   if (base.state === 'unknown') {
     if (historyStatus === 'loading') return 'Checking whether you are IN or OUT…';
@@ -86,6 +109,10 @@ export function successMessage(res: AttendanceV2Response): string {
 export function todayLine(data: HistoryResponse | null, fresh: boolean): string | null {
   if (!data || markMode(data, fresh) !== 'v2') return null;
   const worked = typeof data.today_worked_s === 'number' && data.today_worked_s > 0 ? formatWorked(data.today_worked_s) : null;
+  if (data.pending_exit_request?.status === 'pending') {
+    const t = clockHM(data.pending_exit_request.requested_at_ist);
+    return t ? `Exit request pending since ${t}` : 'Exit request pending';
+  }
   if (data.is_in) {
     const t = clockHM(data.open_since_ist);
     const parts = [t ? `Today: IN since ${t}` : 'Today: IN'];
@@ -93,4 +120,15 @@ export function todayLine(data: HistoryResponse | null, fresh: boolean): string 
     return parts.join(' · ');
   }
   return worked ? `Today: OUT · worked ${worked}` : 'Today: not marked yet';
+}
+
+export function windowSummary(data: HistoryResponse | null, fresh: boolean): string[] {
+  if (!data || markMode(data, fresh) !== 'v2') return [];
+  const inLabel = data.in_window?.open ? 'ENTRY: Open now' : 'ENTRY: Closed';
+  const outLabel = data.out_window?.open ? 'EXIT: Open now' : 'EXIT: Closed';
+  const inSpec = data.in_window?.active ? ` · ${data.in_window.active.start}–${data.in_window.active.end}` :
+    data.in_window?.next ? ` · opens ${data.in_window.next.start}` : '';
+  const outSpec = data.out_window?.active ? ` · ${data.out_window.active.start}–${data.out_window.active.end}` :
+    data.out_window?.next ? ` · opens ${data.out_window.next.start}` : '';
+  return [`${inLabel}${inSpec}`, `${outLabel}${outSpec}`];
 }

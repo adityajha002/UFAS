@@ -5,6 +5,8 @@
 // Both MUST match the server's crypto.go byte for byte (docs/PROTOCOL.md).
 
 export type AttendAction = 'in' | 'out';
+export type RequestOutAction = 'request_out';
+export type AttendanceV2Action = 'in' | 'out';
 
 export type AttendanceFields = {
   challengeId: string;
@@ -15,7 +17,8 @@ export type AttendanceFields = {
   accuracyCm: number;
 };
 
-export type AttendanceV2Fields = AttendanceFields & { action: AttendAction };
+export type AttendanceV2Fields = AttendanceFields & { action: AttendanceV2Action };
+export type RequestOutFields = AttendanceFields;
 
 export type HistoryFields = {
   challengeId: string;
@@ -23,7 +26,8 @@ export type HistoryFields = {
   facultyId: string;
 };
 
-export const ATTEND_ACTIONS: readonly AttendAction[] = ['in', 'out'];
+export const ATTEND_ACTIONS: readonly AttendanceV2Action[] = ['in', 'out'];
+export const REQUEST_OUT_ACTION = 'request_out' as const;
 
 export const attendV1Payload = (f: AttendanceFields): string =>
   `attend.v1|${f.challengeId}|${f.nonce}|${f.facultyId}|${f.latMicro}|${f.lonMicro}|${f.accuracyCm}`;
@@ -33,6 +37,9 @@ export function attendV2Payload(f: AttendanceV2Fields): string {
   if (!ATTEND_ACTIONS.includes(f.action)) throw new Error('bad_action');
   return `attend.v2|${f.action}|${f.challengeId}|${f.nonce}|${f.facultyId}|${f.latMicro}|${f.lonMicro}|${f.accuracyCm}`;
 }
+
+export const attendRequestOutPayload = (f: RequestOutFields): string =>
+  `attend.v2|${REQUEST_OUT_ACTION}|${f.challengeId}|${f.nonce}|${f.facultyId}|${f.latMicro}|${f.lonMicro}|${f.accuracyCm}`;
 
 export const historyPayload = (f: HistoryFields): string =>
   `history.v1|${f.challengeId}|${f.nonce}|${f.facultyId}`;
