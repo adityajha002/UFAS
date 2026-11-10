@@ -132,6 +132,15 @@ func (p *phone) attendBody(cid, nonce string, lat, lon, acc int64) map[string]an
 	}
 }
 
+func (p *phone) attendV2Body(cid, nonce, action string, lat, lon, acc int64) map[string]any {
+	return map[string]any{
+		"challenge_id": cid, "faculty_id": p.facultyID,
+		"lat_micro": lat, "lon_micro": lon, "accuracy_cm": acc,
+		"action":    action,
+		"signature": p.sign(attendMsgV2(action, cid, nonce, p.facultyID, lat, lon, acc)),
+	}
+}
+
 // attend does the whole flow: challenge, sign, submit.
 func (p *phone) attend(lat, lon, acc int64) (int, map[string]any) {
 	cid, nonce := p.challenge()
@@ -183,6 +192,33 @@ func TestHappyPath(t *testing.T) {
 	}
 	if d := asStrings(out["days"]); len(d) != 1 || d[0] != "2026-10-23" {
 		t.Fatalf("days: %v", d)
+	}
+}
+
+func TestV2AttendanceFlow(t *testing.T) {
+	e := newEnv(t)
+	p := e.enroll("F001", "Dr. Rao")
+
+	cid, nonce := p.challenge()
+	st, out := e.post("/attendance", p.attendV2Body(cid, nonce, "in", geoLatMicro, geoLonMicro, 1500))
+	if st != 201 || out["action"] != "in" || out["is_in"] != true {
+		t.Fatalf("in: %d %v", st, out)
+	}
+
+	st, out = p.history()
+	if st != 200 || out["is_in"] != true {
+		t.Fatalf("history after in: %d %v", st, out)
+	}
+
+	cid, nonce = p.challenge()
+	st, out = e.post("/attendance", p.attendV2Body(cid, nonce, "out", geoLatMicro, geoLonMicro, 1500))
+	if st != 201 || out["action"] != "out" || out["is_in"] != false {
+		t.Fatalf("out: %d %v", st, out)
+	}
+
+	st, out = p.history()
+	if st != 200 || out["is_in"] != false {
+		t.Fatalf("history after out: %d %v", st, out)
 	}
 }
 

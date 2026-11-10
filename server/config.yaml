@@ -1,6 +1,6 @@
 server:
   listen: "0.0.0.0:8080"
-  db_file: "/home/aditya-jha/Documents/UFAS/server/attendance.db"
+  db_file: "../data/attendance.db"
 
 geofence:
   lat: 28.6068268701292

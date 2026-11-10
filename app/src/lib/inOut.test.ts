@@ -12,10 +12,10 @@ describe('markMode', () => {
     expect(markMode(null, true)).toBe('unknown');
     expect(markMode(IN_NOW, false)).toBe('unknown'); // a cached is_in never decides
   });
-  it('v2 when the server reports is_in, v1 when it does not', () => {
+  it('prefers the IN/OUT flow for fresh history data', () => {
     expect(markMode(IN_NOW, true)).toBe('v2');
     expect(markMode(OUT_NOW, true)).toBe('v2');
-    expect(markMode(V1, true)).toBe('v1');
+    expect(markMode(V1, true)).toBe('v2');
   });
 });
 
@@ -27,9 +27,9 @@ describe('inOutBase', () => {
   it('closed window keeps the action', () => {
     expect(inOutBase({ ...IN_NOW, window_open: false }, true)).toEqual({ state: 'closed', action: 'out' });
   });
-  it('unknown from cache or an old server', () => {
+  it('uses the new IN/OUT flow whenever the history is fresh', () => {
     expect(inOutBase(IN_NOW, false)).toEqual({ state: 'unknown', action: null });
-    expect(inOutBase(V1, true)).toEqual({ state: 'unknown', action: null });
+    expect(inOutBase(V1, true)).toEqual({ state: 'idle', action: 'in' });
     expect(inOutBase(null, false)).toEqual({ state: 'unknown', action: null });
   });
 });
@@ -111,9 +111,9 @@ describe('todayLine', () => {
     expect(todayLine({ ...OUT_NOW, today_worked_s: 22800 }, true)).toBe('Today: OUT · worked 6h 20m');
     expect(todayLine(OUT_NOW, true)).toBe('Today: not marked yet');
   });
-  it('nothing when the state is not known', () => {
+  it('still shows a reasonable line for the forced IN/OUT flow', () => {
     expect(todayLine(IN_NOW, false)).toBeNull(); // cache only
-    expect(todayLine(V1, true)).toBeNull();      // old server
+    expect(todayLine(V1, true)).toBe('Today: not marked yet');
     expect(todayLine(null, true)).toBeNull();
   });
 });

@@ -39,6 +39,15 @@ CREATE TABLE IF NOT EXISTS attendance (
   note        TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (faculty_id, day)
 );
+CREATE TABLE IF NOT EXISTS attendance_state (
+  faculty_id TEXT NOT NULL,
+  day        TEXT NOT NULL,
+  is_in      INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER,
+  today_worked_s INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (faculty_id, day)
+);
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts INTEGER NOT NULL,
