@@ -40,6 +40,15 @@ export function fmtShort(s: string): string {
 export const timePart = (ist: string) => ist.slice(11, 19);
 export const datePart = (ist: string) => ist.slice(0, 10);
 
+export function fmtHours(seconds: number | null | undefined): string {
+  if (seconds == null || Number.isNaN(seconds)) return "—";
+  const total = Math.max(0, Math.floor(seconds));
+  if (total === 0) return "0m";
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  return `${m}m`;
+}
 export function fmtUptime(sec: number): string {
   const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
   if (d > 0) return `${d}d ${h}h`;

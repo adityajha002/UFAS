@@ -66,7 +66,15 @@ small, .small { font-size: 12px; }
 .pill-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--pill); border-radius: 9px; padding: 5px 12px; min-height: 28px; }
 .pill-row .name { font-style: italic; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pill-row .time { font-variant-numeric: tabular-nums; }
+.pill-row .hours { font-variant-numeric: tabular-nums; font-weight: 700; }
+.pill-row.incomplete { background: #ebc0b3; border: 1px solid rgba(143, 42, 29, .45); }
+.pill-row.incomplete .meta { color: var(--ink); }
 .pill-row.dim { background: transparent; border: 1px dashed var(--pill); }
+.sub-row-label { font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--ink-soft); text-transform: uppercase; padding: 2px 4px 0; }
+.pill-row-stack { width: 100%; }
+.pill-row-main { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.session-list { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; color: var(--ink-soft); font-size: 12px; }
+.session-list li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .pill-row.dim .name { font-style: normal; font-weight: 500; }
 .rows.absent { margin-top: 8px; }
 .datenav { display: flex; align-items: center; gap: 4px; }

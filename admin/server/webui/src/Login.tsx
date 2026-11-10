@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { api, ApiError, NetworkError } from "./api";
-import type { Status } from "./types";
+import type { ServerStatus } from "./types";
 
-export function Login({ onDone, notice }: { onDone: (s: Status) => void; notice?: string }) {
+export function Login({ onDone, notice }: { onDone: (s: ServerStatus) => void; notice?: string }) {
   const [token, setToken] = useState("");
   const [err, setErr] = useState(notice ?? "");
   const [busy, setBusy] = useState(false);

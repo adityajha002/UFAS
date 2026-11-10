@@ -1,6 +1,6 @@
 import type {
   ActionPage, AuditPage, CodeIssued, ConfigBody, ConfigHistoryItem, Day, FacultyList,
-  Status, UserAttendance,
+  IncompletePage, ServerStatus, UserAttendance,
 } from "./types";
 
 const BASE = "/admin/api";
@@ -78,14 +78,19 @@ const enc = encodeURIComponent; // employee ids always go through this
 
 export const api = {
   /** Login check: does not trigger the global 401 handler. */
-  async login(candidate: string): Promise<Status> {
+  async login(candidate: string): Promise<ServerStatus> {
     const res = await send("GET", "/status", { token: candidate });
     if (!res.ok) throw await toApiError(res);
     setToken(candidate);
-    return (await res.json()) as Status;
+    return (await res.json()) as ServerStatus;
   },
-  status: () => call<Status>("GET", "/status"),
+  status: () => call<ServerStatus>("GET", "/status"),
   day: (date?: string) => call<Day>("GET", "/attendance/day", { query: { date } }),
+  incomplete: (date?: string) => call<IncompletePage>("GET", "/attendance/incomplete", { query: { date } }),
+  exit: (employee_id: string, date: string, out_time: string, note?: string) =>
+    call<{ employee_id: string; date: string; ok: boolean }>("POST", "/attendance/exit", {
+      body: { employee_id, date, out_time, note: note ?? "" },
+    }),
   faculty: () => call<FacultyList>("GET", "/faculty"),
   userAttendance: (emp: string, from?: string, to?: string) =>
     call<UserAttendance>("GET", `/faculty/${enc(emp)}/attendance`, { query: { from, to } }),

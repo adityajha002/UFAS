@@ -1,11 +1,11 @@
 import { createContext, useContext } from "react";
 import { ApiError, NetworkError } from "./api";
-import type { FacultyRow, Modal, Status } from "./types";
+import type { FacultyRow, Modal, ServerStatus } from "./types";
 
 export type AuditPreset = { outcome: string; nonce: number } | null;
 
 export type AppCtx = {
-  status: Status;
+  status: ServerStatus;
   today: string;            // server date (IST), YYYY-MM-DD
   down: boolean;
   stopped: boolean;         // shutdown was requested from this panel

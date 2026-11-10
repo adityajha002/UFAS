@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { addDays, diffDays, fmtDay, isYmd, firstOfMonth } from "../lib/dates";
+import { addDays, diffDays, fmtDay, fmtHours, isYmd, firstOfMonth } from "../lib/dates";
 import { buildPatch } from "../lib/config";
 import { api, ApiError, NetworkError, filenameFromDisposition, setToken } from "../api";
 import type { ConfigField } from "../types";
@@ -20,6 +20,11 @@ describe("dates", () => {
   it("formats without the system clock or timezone", () => {
     expect(fmtDay("2026-10-30")).toBe("Fri 30 Oct 2026");
     expect(firstOfMonth("2026-10-31")).toBe("2026-10-01");
+  });
+  it("formats hours with nulls and zero", () => {
+    expect(fmtHours(6 * 3600 + 5 * 60)).toBe("6h 05m");
+    expect(fmtHours(null)).toBe("—");
+    expect(fmtHours(0)).toBe("0m");
   });
 });
 

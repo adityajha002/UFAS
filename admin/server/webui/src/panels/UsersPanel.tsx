@@ -38,7 +38,11 @@ export function UsersPanel({ selected, onSelect }: { selected: string | null; on
                 <button className="user-main" aria-pressed={sel} onClick={() => onSelect(sel ? null : u.employee_id)}>
                   <span className={u.enrolled ? "dot on" : "dot"} aria-label={u.enrolled ? "Enrolled" : "Not enrolled"} />
                   <span className="u-name">{u.name}<small>{u.employee_id}</small></span>
-                  <span className="u-stat">{u.days_present} days<small>{u.last_marked_day ? `last ${fmtShort(u.last_marked_day)}` : "never"}</small></span>
+                  <span className="u-stat">
+                    {u.days_present} days
+                    {u.incomplete && u.incomplete > 0 && <span className="chip bad">{u.incomplete} incomplete</span>}
+                    <small>{u.last_marked_day ? `last ${fmtShort(u.last_marked_day)}` : "never"}</small>
+                  </span>
                 </button>
                 <button className="icon-btn kebab" aria-haspopup="menu" aria-expanded={menu === u.employee_id} aria-label={`Actions for ${u.name}`}
                   onClick={() => setMenu(menu === u.employee_id ? null : u.employee_id)}>⋯</button>

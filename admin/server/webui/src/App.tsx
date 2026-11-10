@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import logoUrl from "./asset/logo.png";
 import { api, ApiError, setUnauthorizedHandler } from "./api";
-import { CodeModal, DeleteDialog, HistoryModal, MarkModal, RevokeDialog, ShutdownDialog } from "./components/dialogs";
+import { CodeModal, DeleteDialog, ExitDialog, HistoryModal, MarkModal, RevokeDialog, ShutdownDialog } from "./components/dialogs";
 import { Toasts, type ToastItem } from "./components/Toasts";
 import { Ctx, type AppCtx, type AuditPreset } from "./ctx";
 import { usePolling } from "./hooks/usePolling";
@@ -11,17 +11,17 @@ import { ConfigPanel } from "./panels/ConfigPanel";
 import { DownloadBar } from "./panels/DownloadBar";
 import { StatusPanel } from "./panels/StatusPanel";
 import { UsersPanel } from "./panels/UsersPanel";
-import type { FacultyRow, Modal, Status } from "./types";
+import type { FacultyRow, Modal, ServerStatus } from "./types";
 
 export default function App() {
-  const [status, setStatus] = useState<Status | null>(null);
+  const [status, setStatus] = useState<ServerStatus | null>(null);
   const signOut = useCallback(() => { setStatus(null); }, []);
   useEffect(() => { setUnauthorizedHandler(() => signOut()); return () => setUnauthorizedHandler(null); }, [signOut]);
   return <Dashboard initial={status} signOut={() => signOut()} />;
 }
 
-function Dashboard({ initial, signOut }: { initial: Status | null; signOut: () => void }) {
-  const [status, setStatus] = useState<Status | null>(initial);
+function Dashboard({ initial, signOut }: { initial: ServerStatus | null; signOut: () => void }) {
+  const [status, setStatus] = useState<ServerStatus | null>(initial);
   const [down, setDown] = useState(false);
   const [stopped, setStopped] = useState(false);
   const fails = useRef(0);
@@ -129,6 +129,7 @@ function Dashboard({ initial, signOut }: { initial: Status | null; signOut: () =
         {modal?.kind === "revoke" && <RevokeDialog employeeId={modal.employee_id} />}
         {modal?.kind === "delete" && <DeleteDialog employeeId={modal.employee_id} />}
         {modal?.kind === "mark" && <MarkModal employeeId={modal.employee_id} date={modal.date} />}
+        {modal?.kind === "exit" && <ExitDialog employeeId={modal.employee_id} date={modal.date} inTime={modal.in_time ?? null} />}
         {modal?.kind === "shutdown" && <ShutdownDialog />}
         {modal?.kind === "history" && <HistoryModal />}
         <Toasts items={toasts} />

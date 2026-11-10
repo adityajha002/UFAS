@@ -112,6 +112,97 @@ export function MarkModal({ employeeId, date }: { employeeId?: string; date?: st
   );
 }
 
+function toMin(str: string | null | undefined): number | null {
+  if (!str) return null;
+  const s = str.includes("T") ? str.slice(11, 16) : str.slice(0, 5);
+  if (!/^\d{2}:\d{2}$/.test(s)) return null;
+  const [h, m] = s.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return h * 60 + m;
+}
+
+export function ExitDialog({ employeeId, date, inTime }: { employeeId: string; date: string; inTime?: string | null }) {
+  const { closeModal, notify, toast, today, users } = useApp();
+  const [outTime, setOutTime] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const name = users.find((u) => u.employee_id === employeeId)?.name ?? employeeId;
+  const opening = toMin(inTime ?? null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true); setErr(""); setFields({});
+
+    const timeOk = /^\d{2}:\d{2}$/.test(outTime);
+    if (!timeOk) {
+      setFields({ out_time: "Use HH:MM in 24-hour time" });
+      setBusy(false);
+      return;
+    }
+    const mins = toMin(outTime);
+    if (mins == null) {
+      setFields({ out_time: "Use HH:MM in 24-hour time" });
+      setBusy(false);
+      return;
+    }
+    if (date > today) {
+      setFields({ date: "Date must not be in the future" });
+      setBusy(false);
+      return;
+    }
+    if (opening != null && date === today && mins < opening) {
+      setFields({ out_time: "Exit time must be after the open session started" });
+      setBusy(false);
+      return;
+    }
+    if (date === today && mins > (new Date().getHours() * 60 + new Date().getMinutes()) + 1) {
+      setFields({ out_time: "Exit time cannot be in the future" });
+      setBusy(false);
+      return;
+    }
+    if (!note.trim()) {
+      setFields({ note: "Required" });
+      setBusy(false);
+      return;
+    }
+
+    try {
+      await api.exit(employeeId, date, outTime, note.trim());
+      toast(`Closed ${name}'s open session on ${fmtDay(date)}`);
+      notify(); closeModal();
+    } catch (x) {
+      if (x instanceof ApiError && x.fields) setFields(x.fields);
+      setErr(errText(x));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Mark exit" onClose={closeModal}>
+      <form className="form" onSubmit={submit}>
+        <p><strong>{name}</strong> ({employeeId})</p>
+        <p className="muted">Date: {fmtDay(date)}</p>
+        {inTime && <p className="muted">Open session started at {toMin(inTime) != null ? inTime.slice(11, 16) : inTime}</p>}
+        <label htmlFor="e-time">Exit time (HH:MM, required)</label>
+        <input id="e-time" type="time" value={outTime} min={opening == null ? undefined : `${String(Math.floor(opening / 60)).padStart(2, "0")}:${String(opening % 60).padStart(2, "0")}`} max={date === today ? new Date().toTimeString().slice(0, 5) : undefined} onChange={(e) => setOutTime(e.target.value)} required />
+        <Err text={fields.out_time} />
+        <Err text={fields.date} />
+        <label htmlFor="e-note">Note (required, kept in the record)</label>
+        <input id="e-note" value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="For example: phone battery died, settled by admin" />
+        <Err text={fields.note} />
+        {err && !Object.keys(fields).length && <Err text={err} />}
+        <div className="dialog-actions">
+          <button type="button" className="btn ghost" onClick={closeModal}>Cancel</button>
+          <button className="btn danger" disabled={busy || !outTime || !note.trim()}>{busy ? "Saving…" : "Mark exit"}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 /* ---------- Revoke (CLI: revoke) ---------- */
 export function RevokeDialog({ employeeId }: { employeeId: string }) {
   const { closeModal, notify, toast, users } = useApp();

@@ -1,4 +1,6 @@
-export type Status = {
+export type Status = "IN_PROGRESS" | "COMPLETE" | "INCOMPLETE";
+
+export type ServerStatus = {
   running: true; started_at: string; uptime_s: number; server_time_ist: string;
   public_listener: { configured: string; reachable: boolean; loopback_only: boolean };
   admin_listener: { configured: string };
@@ -8,37 +10,66 @@ export type Status = {
     start: string; end: string; next_change_at_ist: string | null; weekday: string;
   };
   database: { file: string; size_bytes: number | null; ok: boolean };
-  counts: { faculty: number; enrolled: number; marked_today: number };
+  counts: { faculty: number; enrolled: number; marked_today: number; in_now?: number; incomplete_open?: number };
   attendance_attempts_24h: { ok: number; failed: number };
   config_warnings: string[];
 };
 
 export type Source = "phone" | "manual";
 
+export type SessionItem = {
+  in_ist?: string | null;
+  out_ist?: string | null;
+  duration_s?: number | null;
+  in_source?: Source | null;
+  out_source?: Source | null;
+  source?: Source | null;
+};
+
 export type DayItem = {
   employee_id: string; name: string; enrolled: boolean; marked: boolean;
   marked_at_ist: string | null; distance_m: number | null; source: Source | null; note: string;
+  status?: Status | null;
+  hours_s?: number | null;
+  sessions?: SessionItem[] | null;
+  first_in_ist?: string | null;
+  last_out_ist?: string | null;
+};
+export type DaySummary = {
+  total: number; marked: number; not_marked: number; not_enrolled: number;
+  in_progress?: number; incomplete?: number;
 };
 export type Day = {
   date: string; is_today: boolean; is_weekend: boolean; is_future: boolean;
-  summary: { total: number; marked: number; not_marked: number; not_enrolled: number };
+  summary: DaySummary;
   faculty: DayItem[];
 };
 
 export type FacultyRow = {
   employee_id: string; name: string; enrolled: boolean; days_present: number;
   via_phone: number; manual: number; last_marked_day: string | null;
+  incomplete?: number; in_progress?: number;
 };
 export type FacultyList = { range: { from: string | null; to: string | null }; total: number; faculty: FacultyRow[] };
 
-export type UserDay = { day: string; marked_at_ist: string; source: Source; distance_m: number | null; note: string };
+export type UserDay = {
+  day: string; marked_at_ist: string; source: Source; distance_m: number | null; note: string;
+  status?: Status | null; hours_s?: number | null; in_ist?: string | null; out_ist?: string | null;
+};
 export type UserAttendance = {
   employee: { employee_id: string; name: string; enrolled: boolean };
   range: { from: string | null; to: string | null };
   days_present: number; via_phone: number; manual: number;
   first_marked_day: string | null; last_marked_day: string | null;
   days: UserDay[]; days_truncated: boolean;
+  incomplete?: number; total_hours_s?: number | null;
 };
+
+export type IncompleteItem = {
+  employee_id: string; name: string; date: string; in_ist: string;
+  status: Status; source?: Source | null; note?: string | null;
+};
+export type IncompletePage = { items: IncompleteItem[]; total?: number; truncated?: boolean; };
 
 export type ConfigField = {
   key: string; label: string; type: "float" | "time" | "string" | "int"; unit?: string;
@@ -71,5 +102,6 @@ export type Modal =
   | { kind: "revoke"; employee_id: string }
   | { kind: "delete"; employee_id: string }
   | { kind: "mark"; employee_id?: string; date?: string }
+  | { kind: "exit"; employee_id: string; date: string; in_time?: string | null }
   | { kind: "shutdown" }
   | { kind: "history" };
