@@ -4,8 +4,8 @@ set -e
 PORT="${PORT:-8080}"
 echo "Starting UFAS on Render on port $PORT..."
 
-# Replace listen port dynamically with Render's assigned $PORT
-sed -i "s/listen: \".*\"/listen: \"0.0.0.0:$PORT\"/" /etc/ufas/config.server.yaml
+# Replace ONLY the server listen port dynamically with Render's assigned $PORT
+sed -i '/^server:/,/^geofence:/ s/listen: .*/listen: "0.0.0.0:'"$PORT"'"/' /etc/ufas/config.server.yaml
 
 # Start admin-server in the background on 127.0.0.1:9090
 admin-server --config /etc/ufas/config.admin.yaml serve &
