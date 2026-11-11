@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import logoUrl from "./asset/logo.png";
-import { api, ApiError, setUnauthorizedHandler } from "./api";
+import { api, ApiError, getServerUrl, getToken, setServerUrl, setToken, setUnauthorizedHandler } from "./api";
 import { CodeModal, DeleteDialog, ExitRequestModal, HistoryModal, MarkModal, RevokeDialog, ShutdownDialog } from "./components/dialogs";
 import { Toasts, type ToastItem } from "./components/Toasts";
 import { Ctx, type AppCtx, type AuditPreset } from "./ctx";
@@ -23,7 +23,11 @@ export default function App() {
 function Dashboard({ initial, signOut }: { initial: Status | null; signOut: () => void }) {
   const [status, setStatus] = useState<Status | null>(initial);
   const [down, setDown] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [stopped, setStopped] = useState(false);
+  const [urlDraft, setUrlDraft] = useState<string>(() => getServerUrl());
+  const [tokenDraft, setTokenDraft] = useState<string>(() => getToken() ?? "");
+  const [connTick, setConnTick] = useState(0);
   const fails = useRef(0);
   const downRef = useRef(false);
   const [users, setUsers] = useState<FacultyRow[]>([]);
@@ -40,16 +44,23 @@ function Dashboard({ initial, signOut }: { initial: Status | null; signOut: () =
     try {
       const s = await api.status();
       fails.current = 0;
+      setAuthError(null);
       setStatus(s);
       if (downRef.current) { // first success after DOWN: everything refetches
         downRef.current = false; setDown(false); setStopped(false); setVersion((v) => v + 1);
       }
     } catch (e) {
-      if (e instanceof ApiError) return; // 401 handled globally; 429 and others are not "down"
+      if (e instanceof ApiError) {
+        if (e.code === "unauthorized" || e.status === 401) {
+          setAuthError("Admin token required or invalid.");
+          setStatus(null);
+        }
+        return;
+      }
       fails.current++;
       if (fails.current >= 2 && !downRef.current) { downRef.current = true; setDown(true); }
     }
-  }, down ? 3_000 : 5_000, true, 30_000);
+  }, down ? 3_000 : 5_000, !authError, 30_000, [connTick]);
 
   const loadUsers = useCallback(async () => {
     try { setUsers((await api.faculty()).faculty); } catch { /* the status poll reports connectivity */ }
@@ -73,13 +84,70 @@ function Dashboard({ initial, signOut }: { initial: Status | null; signOut: () =
     requestAuditFilter: (outcome: string) => setPreset({ outcome, nonce: Date.now() }),
   }), [status, down, stopped, users, version, toast, preset]);
 
+  const applyConnectionSettings = useCallback((nextUrl: string, nextToken: string) => {
+    setServerUrl(nextUrl.trim() ? nextUrl : null);
+    setToken(nextToken.trim() ? nextToken.trim() : null);
+    fails.current = 0;
+    downRef.current = false;
+    setDown(false);
+    setAuthError(null);
+    setStatus(null);
+    setConnTick((t) => t + 1);
+  }, []);
+
   if (!ctx) {
     return (
       <div className="login-wrap">
         <header className="topbar"><h1>USICT Attendance Server</h1></header>
         <div className="login">
-          <p aria-live="polite">{down ? "Cannot reach the server." : "Connecting to the server…"}</p>
-          <button className="btn" onClick={signOut}>Sign out</button>
+          <p aria-live="polite">
+            {authError
+              ? authError
+              : down
+                ? "Cannot reach the server. Verify the server URL or tunnel below."
+                : "Connecting to the server…"}
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              applyConnectionSettings(urlDraft, tokenDraft);
+            }}
+            style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem", textAlign: "left" }}
+          >
+            <label style={{ display: "grid", gap: "0.25rem", fontSize: "0.875rem" }}>
+              <span>Server / Cloudflare Tunnel URL (leave blank to use default proxy)</span>
+              <input
+                type="text"
+                value={urlDraft}
+                onChange={(e) => setUrlDraft(e.target.value)}
+                placeholder="https://your-tunnel.trycloudflare.com"
+              />
+            </label>
+            <label style={{ display: "grid", gap: "0.25rem", fontSize: "0.875rem" }}>
+              <span>Admin Token (optional if disabled on server)</span>
+              <input
+                type="password"
+                value={tokenDraft}
+                onChange={(e) => setTokenDraft(e.target.value)}
+                placeholder="Bearer token"
+              />
+            </label>
+            <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+              {urlDraft && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setUrlDraft("");
+                    applyConnectionSettings("", tokenDraft);
+                  }}
+                >
+                  Use Default Proxy
+                </button>
+              )}
+              <button type="submit" className="btn primary">Connect</button>
+            </div>
+          </form>
         </div>
       </div>
     );
@@ -105,7 +173,30 @@ function Dashboard({ initial, signOut }: { initial: Status | null; signOut: () =
                 backgroundClip: "padding-box",
               }}
             />
-            {menuOpen && <div className="menu right" role="menu"><button role="menuitem" onClick={signOut}>Sign out</button></div>}
+            {menuOpen && (
+              <div className="menu right" role="menu">
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setStatus(null);
+                    setAuthError("Update server connection settings:");
+                  }}
+                >
+                  Server URL ({getServerUrl() || "proxy"})
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setStatus(null);
+                    signOut();
+                  }}
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
         </header>
         {down && (

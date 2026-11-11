@@ -25,8 +25,8 @@ attendance_windows:
       end: "17:00"
 
 admin:
-  listen: "0.0.0.0:9090"
-  token_sha256: "267989bb21f7171024eb2332bc0734a03eb708ff6f26c460f1ae5cfb7763634f"
+  listen: ""
+  token_sha256: ""
 
 audit:
   retention_days: 180

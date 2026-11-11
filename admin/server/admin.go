@@ -133,10 +133,23 @@ func (s *Server) adminRoutes() http.Handler {
 
 // ---- auth ----
 
+func setAdminCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, ngrok-skip-browser-warning")
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, Retry-After, WWW-Authenticate")
+	w.Header().Set("Access-Control-Max-Age", "600")
+}
+
 func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setAdminCORSHeaders(w)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		ip, now := remoteIP(r), s.now()
 		if s.throttle.blocked(ip, now) {
 			w.Header().Set("Retry-After", "60")

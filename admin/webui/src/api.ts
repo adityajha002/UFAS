@@ -6,6 +6,7 @@ import type {
 const BASE = "/admin/api";
 const MAIN_SERVER_URL = "http://127.0.0.1:8080";
 const KEY = "usict_admin_token";
+const SERVER_URL_KEY = "usict_admin_server_url";
 const TIMEOUT_MS = 10_000;
 
 export class ApiError extends Error {
@@ -16,14 +17,41 @@ export class ApiError extends Error {
 }
 export class NetworkError extends Error {}
 
-// ---- token: sessionStorage only, never in a URL ----
+export function normalizeServerUrl(raw: string | null | undefined): string {
+  if (!raw) return "";
+  let s = raw.trim().replace(/\/+$/, "");
+  if (s.endsWith("/admin/api")) {
+    s = s.slice(0, -"/admin/api".length).replace(/\/+$/, "");
+  }
+  return s;
+}
+
+const envServerUrl = normalizeServerUrl(
+  typeof import.meta !== "undefined" && import.meta.env ? import.meta.env.VITE_API_BASE_URL : "",
+);
+
+// ---- token & server URL ----
 let token: string | null = null;
+let serverUrl: string = envServerUrl;
 try { token = sessionStorage.getItem(KEY); } catch { /* storage blocked: stay in memory */ }
+try {
+  const savedUrl = localStorage.getItem(SERVER_URL_KEY);
+  if (savedUrl !== null) serverUrl = normalizeServerUrl(savedUrl);
+} catch { /* storage blocked */ }
 
 export const getToken = () => token;
 export function setToken(t: string | null) {
   token = t;
   try { t ? sessionStorage.setItem(KEY, t) : sessionStorage.removeItem(KEY); } catch { /* ignore */ }
+}
+
+export const getServerUrl = () => serverUrl;
+export function setServerUrl(url: string | null) {
+  serverUrl = normalizeServerUrl(url);
+  try {
+    if (url === null) localStorage.removeItem(SERVER_URL_KEY);
+    else localStorage.setItem(SERVER_URL_KEY, serverUrl);
+  } catch { /* ignore */ }
 }
 let onUnauthorized: (() => void) | null = null;
 export function setUnauthorizedHandler(fn: (() => void) | null) { onUnauthorized = fn; }
@@ -49,11 +77,11 @@ async function send(method: string, path: string, opts: { query?: Query; body?: 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   const t = opts.token === undefined ? token : opts.token;
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { "ngrok-skip-browser-warning": "1" };
   if (t) headers.Authorization = `Bearer ${t}`;
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
   try {
-    return await fetch(BASE + path + qs(opts.query), {
+    return await fetch(serverUrl + BASE + path + qs(opts.query), {
       method, headers, signal: ctl.signal, cache: "no-store",
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });
@@ -113,8 +141,9 @@ export const api = {
   audit: (q: Query) => call<AuditPage>("GET", "/audit", { query: q }),
   actions: (q: Query) => call<ActionPage>("GET", "/actions", { query: q }),
   async shutdown(): Promise<{ status: string; at_ist: string }> {
+    const targetBase = serverUrl || MAIN_SERVER_URL;
     try {
-      const res = await fetch(`${MAIN_SERVER_URL}/server/shutdown`, {
+      const res = await fetch(`${targetBase}/server/shutdown`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirm: "shutdown" }),

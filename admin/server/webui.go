@@ -18,7 +18,7 @@ import (
 //go:embed all:webui/dist
 var uiFS embed.FS
 
-const uiCSP = "default-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+const uiCSP = "default-src 'self'; img-src 'self' data:; connect-src 'self' https: http:; frame-ancestors 'none'; base-uri 'none'"
 
 func uiRoot() fs.FS {
 	sub, err := fs.Sub(uiFS, "webui/dist")

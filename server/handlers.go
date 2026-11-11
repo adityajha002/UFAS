@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -218,12 +220,90 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 
-func (s *Server) corsOptions(w http.ResponseWriter, r *http.Request) {
+var adminServerUpstreamURL = ""
+
+func setCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, ngrok-skip-browser-warning")
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, Retry-After, WWW-Authenticate")
 	w.Header().Set("Access-Control-Max-Age", "600")
+}
+
+func (s *Server) corsOptions(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func adminUpstreamCandidates() []string {
+	if u := strings.TrimSpace(adminServerUpstreamURL); u != "" {
+		return []string{strings.TrimRight(u, "/")}
+	}
+	var out []string
+	if env := strings.TrimSpace(os.Getenv("ADMIN_UPSTREAM_URL")); env != "" {
+		out = append(out, strings.TrimRight(env, "/"))
+	}
+	out = append(out, "http://127.0.0.1:9090", "http://admin-server:9090")
+	return out
+}
+
+func (s *Server) proxyAdminAPI(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "bad_request", "message": "malformed request"})
+		return
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	var lastErr error
+	for _, base := range adminUpstreamCandidates() {
+		targetURL := base + r.URL.RequestURI()
+		req, reqErr := http.NewRequestWithContext(r.Context(), r.Method, targetURL, bytes.NewReader(bodyBytes))
+		if reqErr != nil {
+			lastErr = reqErr
+			continue
+		}
+		for k, vals := range r.Header {
+			if strings.EqualFold(k, "Host") || strings.EqualFold(k, "Connection") {
+				continue
+			}
+			for _, v := range vals {
+				req.Header.Add(k, v)
+			}
+		}
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			lastErr = doErr
+			continue
+		}
+		defer resp.Body.Close()
+		for k, vals := range resp.Header {
+			if strings.HasPrefix(strings.ToLower(k), "access-control-") {
+				continue
+			}
+			w.Header().Del(k)
+			for _, v := range vals {
+				w.Header().Add(k, v)
+			}
+		}
+		setCORSHeaders(w)
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	log.Printf("admin proxy error %s %s: %v", r.Method, r.URL.Path, lastErr)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadGateway)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":   "admin_upstream_unavailable",
+		"message": "admin server is not reachable on port 9090",
+	})
 }
 
 func (s *Server) shutdownServer(w http.ResponseWriter, r *http.Request) (int, any, error) {
@@ -231,9 +311,7 @@ func (s *Server) shutdownServer(w http.ResponseWriter, r *http.Request) (int, an
 		s.corsOptions(w, r)
 		return http.StatusNoContent, nil, nil
 	}
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	setCORSHeaders(w)
 	var req struct {
 		Confirm string `json:"confirm"`
 	}
@@ -247,6 +325,7 @@ func (s *Server) shutdownServer(w http.ResponseWriter, r *http.Request) (int, an
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -260,6 +339,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /admin/api/server/shutdown", s.wrap("server_shutdown", s.shutdownServer))
 	mux.HandleFunc("OPTIONS /server/shutdown", s.corsOptions)
 	mux.HandleFunc("OPTIONS /admin/api/server/shutdown", s.corsOptions)
+	mux.HandleFunc("/admin/api/", s.proxyAdminAPI)
+	mux.HandleFunc("GET /assets/", s.proxyAdminAPI)
+	mux.HandleFunc("GET /{$}", s.proxyAdminAPI)
 	return mux
 }
 

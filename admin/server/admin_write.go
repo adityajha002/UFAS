@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -208,22 +209,41 @@ func (s *Server) adminShutdown(w http.ResponseWriter, r *http.Request) (int, any
 	return 202, map[string]string{"status": "shutting_down", "at_ist": s.now().In(ist).Format(istLayout)}, nil
 }
 
+func mainServerCandidates() []string {
+	if mainServerShutdownURL != "http://127.0.0.1:8080" {
+		return []string{strings.TrimRight(mainServerShutdownURL, "/")}
+	}
+	var out []string
+	if env := strings.TrimSpace(os.Getenv("MAIN_SERVER_URL")); env != "" {
+		out = append(out, strings.TrimRight(env, "/"))
+	}
+	out = append(out, "http://127.0.0.1:8080", "http://attendance-api:8080")
+	return out
+}
+
 func (s *Server) forwardMainServerShutdown() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	payload := strings.NewReader(`{"confirm":"shutdown"}`)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, mainServerShutdownURL+"/server/shutdown", payload)
-	if err != nil {
-		return err
+	var lastErr error
+	for _, base := range mainServerCandidates() {
+		payload := strings.NewReader(`{"confirm":"shutdown"}`)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/server/shutdown", payload)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
+			continue
+		}
+		return nil
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	return nil
+	return lastErr
 }

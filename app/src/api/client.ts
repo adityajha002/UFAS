@@ -105,7 +105,7 @@ export function createClient({ baseUrl, fallbackBaseUrls = [], fetchImpl, timeou
       try {
         res = await doFetch(`${root}${path}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
           body: JSON.stringify(body),
           signal: controller.signal,
         });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { addDays, diffDays, fmtDay, isYmd, firstOfMonth } from "../lib/dates";
 import { buildPatch } from "../lib/config";
-import { api, ApiError, NetworkError, filenameFromDisposition, setToken } from "../api";
+import { api, ApiError, NetworkError, filenameFromDisposition, normalizeServerUrl, setServerUrl, setToken } from "../api";
 import type { ConfigField } from "../types";
 
 describe("dates", () => {
@@ -46,7 +46,7 @@ describe("config patch", () => {
 });
 
 describe("api client", () => {
-  beforeEach(() => { setToken("secret"); vi.restoreAllMocks(); });
+  beforeEach(() => { setToken("secret"); setServerUrl(null); vi.restoreAllMocks(); });
   const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
     new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
 
@@ -80,5 +80,13 @@ describe("api client", () => {
     const r = await api.exportCsv("2026-10-01", "2026-10-31", false);
     expect(r.filename).toBe("attendance_2026-10-01_to_2026-10-31.csv");
     expect(filenameFromDisposition(null)).toBeNull();
+  });
+  it("prefixes configured Cloudflare/remote server URL", async () => {
+    expect(normalizeServerUrl("https://test.trycloudflare.com/admin/api/")).toBe("https://test.trycloudflare.com");
+    setServerUrl("https://test.trycloudflare.com/");
+    const f = vi.spyOn(globalThis, "fetch").mockResolvedValue(json(200, { running: true }));
+    await api.status();
+    const [url] = f.mock.calls[0];
+    expect(String(url)).toBe("https://test.trycloudflare.com/admin/api/status");
   });
 });

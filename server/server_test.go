@@ -630,3 +630,42 @@ func TestHaversine(t *testing.T) {
 		t.Fatalf("got %f", d)
 	}
 }
+
+func TestAdminAPIProxyAndCORS(t *testing.T) {
+	e := newEnv(t)
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"running":true}`))
+	}))
+	defer upstream.Close()
+
+	prev := adminServerUpstreamURL
+	adminServerUpstreamURL = upstream.URL
+	defer func() { adminServerUpstreamURL = prev }()
+
+	// Preflight OPTIONS succeeds without hitting upstream auth
+	optReq, _ := http.NewRequest(http.MethodOptions, e.ts.URL+"/admin/api/status", nil)
+	optResp, err := http.DefaultClient.Do(optReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	optResp.Body.Close()
+	if optResp.StatusCode != http.StatusNoContent || optResp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("preflight: status=%d cors=%q", optResp.StatusCode, optResp.Header.Get("Access-Control-Allow-Origin"))
+	}
+
+	// GET /admin/api/status is proxied to admin-server with headers & CORS
+	getReq, _ := http.NewRequest(http.MethodGet, e.ts.URL+"/admin/api/status", nil)
+	getReq.Header.Set("Authorization", "Bearer mytoken")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK || gotAuth != "Bearer mytoken" || getResp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("proxy: status=%d auth=%q cors=%q", getResp.StatusCode, gotAuth, getResp.Header.Get("Access-Control-Allow-Origin"))
+	}
+}

@@ -88,21 +88,21 @@ curl -i -X POST https://attendance.example.com/register \
 
 That request should return a JSON error response instead of a network error.
 
-## 6. Admin access
+## 6. Admin access (Local Admin UI -> Cloudflare Tunnel)
 
-The admin server stays private to the Docker network and is not intentionally exposed to the public internet. To access admin tools, use a private SSH tunnel or connect from the same host over the Docker network.
+Both `attendance-api` (port `8080`) and `cloudflared` forward `/admin/api/*` requests to `admin-server:9090` with CORS support enabled, so your local Admin UI can talk to the remote server over the exact same Cloudflare Tunnel URL used by the mobile app:
 
-Example local access:
-
-```bash
-ssh -L 9090:127.0.0.1:9090 ubuntu@your-host
-```
-
-Then open:
-
-```text
-http://127.0.0.1:9090/
-```
+1. **Automatic via `app/.env` or `.env`**:
+   - If `app/.env` has `EXPO_PUBLIC_API_BASE_URL=https://your-tunnel.trycloudflare.com` (or your custom Cloudflare hostname), running the Admin UI locally automatically proxies `/admin/api` to that Cloudflare URL:
+     ```bash
+     cd admin/server/webui
+     npm run dev
+     ```
+   - Or explicitly set `VITE_API_BASE_URL=https://your-tunnel.trycloudflare.com` in `admin/server/webui/.env`.
+2. **Directly inside the Admin UI browser screen**:
+   - On the connection screen (or via the top-right account menu -> **Server URL**), paste your Cloudflare Tunnel URL (e.g. `https://your-tunnel.trycloudflare.com`) and click **Connect**.
+3. **Host-local / SSH tunnel access**:
+   - `docker-compose.yml` also binds `127.0.0.1:9090:9090`, so `http://127.0.0.1:9090/` works directly on the host or over `ssh -L 9090:127.0.0.1:9090 ubuntu@your-host`.
 
 ## 7. Persistence and upgrades
 

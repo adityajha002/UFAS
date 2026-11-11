@@ -802,3 +802,24 @@ func TestAdminFacultyTotals(t *testing.T) {
 	ac.wantErr("GET", "/admin/api/faculty?from=2026-10-23", "", 400, "bad_range")
 	ac.wantErr("GET", "/admin/api/faculty?from=x&to=y", "", 400, "bad_date")
 }
+
+func TestAdminCORSAndPreflight(t *testing.T) {
+	_, ac := newAdminEnv(t)
+	good := ac.token
+	ac.token = ""
+
+	// 20 preflight OPTIONS requests without a token must all return 204 with CORS
+	// and never trigger authThrottle.
+	for i := 0; i < 20; i++ {
+		st, hdr, _ := ac.do("OPTIONS", "/admin/api/status", "")
+		if st != 204 || hdr.Get("Access-Control-Allow-Origin") != "*" {
+			t.Fatalf("options %d: status=%d cors=%q", i, st, hdr.Get("Access-Control-Allow-Origin"))
+		}
+	}
+
+	ac.token = good
+	st, hdr, _ := ac.do("GET", "/admin/api/status", "")
+	if st != 200 || hdr.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("get after options: status=%d cors=%q", st, hdr.Get("Access-Control-Allow-Origin"))
+	}
+}

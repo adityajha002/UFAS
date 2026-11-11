@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile.server
     container_name: ufas-attendance-api
     restart: unless-stopped
+    environment:
+      - ADMIN_UPSTREAM_URL=http://admin-server:9090
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
@@ -24,6 +26,10 @@ services:
       dockerfile: Dockerfile.admin
     container_name: ufas-admin-server
     restart: unless-stopped
+    environment:
+      - MAIN_SERVER_URL=http://attendance-api:8080
+    ports:
+      - "127.0.0.1:9090:9090"
     volumes:
       - ufas-data:/data
     networks:

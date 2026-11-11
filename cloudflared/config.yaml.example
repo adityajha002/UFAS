@@ -3,5 +3,8 @@ credentials-file: /etc/cloudflared/creds.json
 
 ingress:
   - hostname: ${CF_HOSTNAME}
+    path: ^/admin/api(/.*)?$
+    service: http://admin-server:9090
+  - hostname: ${CF_HOSTNAME}
     service: http://attendance-api:8080
   - service: http_status:404
