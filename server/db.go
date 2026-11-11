@@ -58,9 +58,12 @@ CREATE TABLE IF NOT EXISTS exit_requests (
   accuracy_cm     INTEGER NOT NULL,
   distance_m      INTEGER NOT NULL,
   challenge_id    TEXT NOT NULL,
+  request_type    TEXT NOT NULL DEFAULT 'out',
   status          TEXT NOT NULL DEFAULT 'pending',
   approved_at     INTEGER,
   approved_by     TEXT,
+  rejected_at     INTEGER,
+  rejected_by     TEXT,
   attendance_day  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_exit_requests_faculty_day ON exit_requests(faculty_id, day);
@@ -128,7 +131,52 @@ func openDB(path string) (*sql.DB, error) {
 			return nil, fmt.Errorf("init db: %w", err)
 		}
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate db: %w", err)
+	}
 	return db, nil
+}
+
+func migrate(db *sql.DB) error {
+	for _, c := range []struct{ table, col, def string }{
+		{"exit_requests", "request_type", "TEXT NOT NULL DEFAULT 'out'"},
+		{"exit_requests", "rejected_at", "INTEGER"},
+		{"exit_requests", "rejected_by", "TEXT"},
+	} {
+		if err := ensureColumn(db, c.table, c.col, c.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureColumn(db *sql.DB, table, col, def string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	have := false
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		if n == col {
+			have = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if have {
+		return nil
+	}
+	_, err = db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, col, def))
+	return err
 }
 
 func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {

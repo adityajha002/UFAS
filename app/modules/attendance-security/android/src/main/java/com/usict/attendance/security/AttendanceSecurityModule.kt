@@ -25,6 +25,16 @@ class AttendanceV2FieldsRecord : Record {
     @Field val accuracyCm: Double = 0.0
 }
 
+class RequestOutFieldsRecord : Record {
+    @Field val action: String = "request_out"
+    @Field val challengeId: String = ""
+    @Field val nonce: String = ""
+    @Field val facultyId: String = ""
+    @Field val latMicro: Double = 0.0
+    @Field val lonMicro: Double = 0.0
+    @Field val accuracyCm: Double = 0.0
+}
+
 class HistoryFieldsRecord : Record {
     @Field val challengeId: String = ""
     @Field val nonce: String = ""
@@ -68,9 +78,9 @@ class AttendanceSecurityModule : Module() {
             mapOf("signature" to Signer.sign(payload.toByteArray(Charsets.UTF_8)))
         }
 
-        AsyncFunction("signRequestOut") { f: AttendanceFieldsRecord ->
+        AsyncFunction("signRequestOut") { f: RequestOutFieldsRecord ->
             val payload = PayloadBuilder.requestOut(
-                f.challengeId, f.nonce, f.facultyId,
+                f.action, f.challengeId, f.nonce, f.facultyId,
                 f.latMicro.toLong(), f.lonMicro.toLong(), f.accuracyCm.toLong(),
             )
             mapOf("signature" to Signer.sign(payload.toByteArray(Charsets.UTF_8)))

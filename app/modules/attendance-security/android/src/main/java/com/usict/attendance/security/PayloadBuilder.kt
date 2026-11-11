@@ -11,6 +11,8 @@ package com.usict.attendance.security
 object PayloadBuilder {
     /** The only actions v2 may sign. Checked here so JS cannot sign any other text. */
     val ACTIONS = setOf("in", "out")
+    val REQUEST_ACTIONS = setOf("request_in", "request_out")
+    const val REQUEST_IN = "request_in"
     const val REQUEST_OUT = "request_out"
 
     fun attend(
@@ -28,9 +30,13 @@ object PayloadBuilder {
     }
 
     fun requestOut(
+        action: String = REQUEST_OUT,
         challengeId: String, nonce: String, facultyId: String,
         latMicro: Long, lonMicro: Long, accuracyCm: Long,
-    ): String = "attend.v2|$REQUEST_OUT|$challengeId|$nonce|$facultyId|$latMicro|$lonMicro|$accuracyCm"
+    ): String {
+        require(action in REQUEST_ACTIONS) { "bad_action" }
+        return "attend.v2|$action|$challengeId|$nonce|$facultyId|$latMicro|$lonMicro|$accuracyCm"
+    }
 
     fun history(challengeId: String, nonce: String, facultyId: String): String =
         "history.v1|$challengeId|$nonce|$facultyId"

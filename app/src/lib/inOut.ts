@@ -3,7 +3,7 @@ import type { AttendanceV2Response, HistoryResponse, WindowStatus } from '../api
 import type { HistoryStatus } from './historyView';
 import type { MarkState } from './markState';
 
-type InOutAction = 'in' | 'out' | 'request_out';
+type InOutAction = 'in' | 'out' | 'request_in' | 'request_out';
 
 /**
  * Which marking flow the screen uses, decided only by /history fetched in this session
@@ -32,7 +32,10 @@ function windowOpen(window: WindowStatus | null | undefined): boolean {
 
 export function inOutBase(data: HistoryResponse | null, fresh: boolean): InOutBase {
   if (!data || markMode(data, fresh) !== 'v2') return { state: 'unknown', action: null };
-  if (isPendingRequest(data)) return { state: 'closed', action: 'request_out', pending: true };
+  if (isPendingRequest(data)) {
+    const requestType = data.pending_exit_request?.request_type ?? 'out';
+    return { state: 'closed', action: requestType === 'in' ? 'request_in' : 'request_out', pending: true };
+  }
   if (!data.is_in) {
     const inOpen = data.in_window ? windowOpen(data.in_window) : data.window_open;
     return { state: inOpen ? 'idle' : 'closed', action: 'in' };
@@ -53,6 +56,7 @@ export function inOutButton(
   if (base.state === 'unknown' || !base.action) {
     return { state: historyStatus === 'loading' ? 'working' : 'unknown' };
   }
+  if (base.action === 'request_in') return { state: base.state === 'closed' ? 'closed' : 'idle', label: 'REQUEST IN' };
   if (base.action === 'request_out') return { state: base.state === 'closed' ? 'closed' : 'idle', label: 'REQUEST OUT' };
   return { state: base.state, label: base.action === 'in' ? 'MARK IN' : 'MARK OUT' };
 }
@@ -64,6 +68,7 @@ export function inOutMessage(
   if (stage) return stage;
   if (notice) return notice;
   if (base.pending) return 'Exit request is pending — waiting for admin approval.';
+  if (base.action === 'request_in') return 'IN is closed. You can request an IN mark for admin approval.';
   if (base.action === 'request_out') return 'OUT is closed. You can request an early exit for admin approval.';
   if (base.state === 'closed') return 'Attendance is not open right now';
   if (base.state === 'unknown') {

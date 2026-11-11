@@ -1,6 +1,6 @@
 export type ApiErrorCode =
   | 'closed' | 'outside_area' | 'poor_accuracy' | 'already_marked'
-  | 'already_in' | 'not_in' | 'request_pending' | 'out_window_open'
+  | 'already_in' | 'not_in' | 'request_pending' | 'in_window_open' | 'out_window_open'
   | 'challenge_expired' | 'challenge_used' | 'too_many_challenges'
   | 'not_enrolled' | 'code_invalid' | 'bad_signature'
   | 'bad_request' | 'challenge_invalid'
@@ -14,6 +14,7 @@ const MESSAGES: Record<ApiErrorCode, string> = {
   already_in: "You're already marked IN.",
   not_in: "You're not marked IN.",
   request_pending: 'An early-exit request is already pending for today.',
+  in_window_open: 'The IN window is open now. Use MARK IN instead.',
   out_window_open: 'The OUT window is open now. Use MARK OUT instead.',
   challenge_expired: 'The request took too long. Please try again.',
   challenge_used: 'That request was already used. Please try again.',
@@ -32,7 +33,7 @@ const MESSAGES: Record<ApiErrorCode, string> = {
 
 const SERVER_CODES = new Set<string>([
   'closed', 'outside_area', 'poor_accuracy', 'already_marked', 'already_in', 'not_in',
-  'request_pending', 'out_window_open', 'challenge_expired', 'challenge_used', 'challenge_invalid', 'too_many_challenges',
+  'request_pending', 'in_window_open', 'out_window_open', 'challenge_expired', 'challenge_used', 'challenge_invalid', 'too_many_challenges',
   'not_enrolled', 'code_invalid', 'bad_signature', 'bad_request',
 ]);
 

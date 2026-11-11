@@ -102,9 +102,12 @@ CREATE TABLE IF NOT EXISTS exit_requests (
   accuracy_cm     INTEGER NOT NULL,
   distance_m      INTEGER NOT NULL,
   challenge_id    TEXT NOT NULL,
+  request_type    TEXT NOT NULL DEFAULT 'out',
   status          TEXT NOT NULL DEFAULT 'pending',
   approved_at     INTEGER,
   approved_by     TEXT,
+  rejected_at     INTEGER,
+  rejected_by     TEXT,
   attendance_day  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_exit_requests_faculty_day ON exit_requests(faculty_id, day);
@@ -173,6 +176,9 @@ func migrate(db *sql.DB) error {
 		{"audit_log", "duration_ms", "INTEGER"},
 		{"settings", "updated_at", "INTEGER NOT NULL DEFAULT 0"},
 		{"config_history", "remote_ip", "TEXT"},
+		{"exit_requests", "request_type", "TEXT NOT NULL DEFAULT 'out'"},
+		{"exit_requests", "rejected_at", "INTEGER"},
+		{"exit_requests", "rejected_by", "TEXT"},
 	} {
 		if err := ensureColumn(db, c.table, c.col, c.def); err != nil {
 			return err

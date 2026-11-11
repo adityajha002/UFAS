@@ -30,6 +30,11 @@ describe('signed payloads', () => {
       .toBe('attend.v2|request_out|c0ffee|bm9uY2U|EMP001|28606827|77209000|1500');
   });
 
+  it('request_in golden vector', () => {
+    expect(attendRequestOutPayload({ action: 'request_in', challengeId: 'c0ffee', nonce: 'bm9uY2U', facultyId: 'EMP001', latMicro: 28606827, lonMicro: 77209000, accuracyCm: 1500 }))
+      .toBe('attend.v2|request_in|c0ffee|bm9uY2U|EMP001|28606827|77209000|1500');
+  });
+
   it('history golden vector', () => {
     expect(historyPayload({ challengeId: 'c1', nonce: 'n1', facultyId: 'f1' })).toBe('history.v1|c1|n1|f1');
   });

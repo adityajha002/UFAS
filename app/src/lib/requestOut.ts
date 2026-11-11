@@ -8,13 +8,14 @@ const SAFETY_MS = 5_000;
 export type RequestOutStage = 'locating' | 'verifying';
 export type RequestOutResult =
   | { status: 'success'; response: RequestOutResponse }
-  | { status: 'request_pending' | 'not_in' | 'out_window_open' };
+  | { status: 'request_pending' | 'not_in' | 'in_window_open' | 'out_window_open' | 'already_in' };
 
 type SignFields = {
   challengeId: string; nonce: string; facultyId: string;
   latMicro: number; lonMicro: number; accuracyCm: number;
+  action?: 'request_in' | 'request_out';
 };
-type SubmitArgs = SignFields & { signature: string };
+type SubmitArgs = Omit<SignFields, 'action'> & { signature: string; action?: 'in' | 'out' };
 
 type FlowDeps = {
   getFix(): Promise<Fix>;
@@ -60,18 +61,21 @@ async function withRetries<T>(
 }
 
 export async function requestOut(
-  facultyId: string, d: RequestOutDeps, onStage: (s: RequestOutStage) => void = () => {},
+  facultyId: string, d: RequestOutDeps, onStage: (s: RequestOutStage) => void = () => {}, action: 'in' | 'out' = 'out',
 ): Promise<RequestOutResult> {
   try {
     const response = await withRetries(facultyId, d, onStage, async (fields) => {
-      const { signature } = await d.signRequestOut(fields);
-      return d.requestOut({ ...fields, signature });
+      const { action: requestAction, ...unsigned } = fields;
+      const { signature } = await d.signRequestOut({ ...unsigned, action: action === 'in' ? 'request_in' : 'request_out' });
+      return d.requestOut({ ...unsigned, signature, action });
     });
     return { status: 'success', response };
   } catch (e) {
     if (e instanceof ApiError) {
       if (e.code === 'request_pending') return { status: 'request_pending' };
       if (e.code === 'not_in') return { status: 'not_in' };
+      if (e.code === 'already_in') return { status: 'already_in' };
+      if (e.code === 'in_window_open') return { status: 'in_window_open' };
       if (e.code === 'out_window_open') return { status: 'out_window_open' };
     }
     throw e;

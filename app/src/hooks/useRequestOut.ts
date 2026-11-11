@@ -24,9 +24,10 @@ function failureMessage(e: unknown): string {
 
 export function useRequestOut(opts: {
   facultyId: string;
+  action?: 'in' | 'out';
   onDone: (res?: RequestOutResponse) => void;
 }) {
-  const { facultyId, onDone } = opts;
+  const { facultyId, action = 'out', onDone } = opts;
   const [stage, setStage] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const lock = useRef(false);
@@ -37,12 +38,15 @@ export function useRequestOut(opts: {
     setNotice(null);
     setStage(STAGE.locating);
     try {
-      const r = await requestOut(facultyId, deps, (st) => setStage(STAGE[st]));
+      const r = await requestOut(facultyId, deps, (st) => setStage(STAGE[st]), action);
       if (r.status === 'success') {
-        setNotice('Exit request submitted — waiting for admin approval.');
+        setNotice(action === 'in' ? 'IN request submitted — waiting for admin approval.' : 'Exit request submitted — waiting for admin approval.');
         onDone(r.response);
       } else if (r.status === 'request_pending') {
-        setNotice('You already have a pending exit request for today.');
+        setNotice('You already have a pending request for today.');
+        onDone();
+      } else if (r.status === 'in_window_open') {
+        setNotice('The IN window is open now. Use MARK IN instead.');
         onDone();
       } else if (r.status === 'out_window_open') {
         setNotice('The OUT window is open now. Use MARK OUT instead.');
@@ -57,7 +61,7 @@ export function useRequestOut(opts: {
       lock.current = false;
       setStage(null);
     }
-  }, [facultyId, onDone]);
+  }, [action, facultyId, onDone]);
 
   return { busy: stage !== null, stage, notice, mark };
 }

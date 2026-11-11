@@ -119,6 +119,7 @@ var errTable = map[string]struct {
 	"already_in":          {409, "already in"},
 	"not_in":              {409, "not in"},
 	"request_pending":     {409, "an early-exit request is already pending"},
+	"in_window_open":      {409, "the IN window is open now; use MARK IN instead"},
 	"out_window_open":     {409, "the OUT window is open now; use MARK OUT instead"},
 	"too_many_challenges": {429, "too many open challenges"},
 }
@@ -245,6 +246,11 @@ func (s *Server) shutdownServer(w http.ResponseWriter, r *http.Request) (int, an
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
 	mux.HandleFunc("POST /register", s.wrap("register", s.register))
 	mux.HandleFunc("POST /challenge", s.wrap("challenge", s.challenge))
 	mux.HandleFunc("POST /attendance", s.wrap("attendance", s.attendance))
@@ -697,6 +703,7 @@ func (s *Server) requestOut(w http.ResponseWriter, r *http.Request) (int, any, e
 	var req struct {
 		ChallengeID string `json:"challenge_id"`
 		FacultyID   string `json:"faculty_id"`
+		Action      string `json:"action"`
 		LatMicro    int64  `json:"lat_micro"`
 		LonMicro    int64  `json:"lon_micro"`
 		AccuracyCm  int64  `json:"accuracy_cm"`
@@ -704,6 +711,13 @@ func (s *Server) requestOut(w http.ResponseWriter, r *http.Request) (int, any, e
 	}
 	if err := decode(w, r, &req); err != nil {
 		return 0, nil, err
+	}
+	requestType := strings.ToLower(req.Action)
+	if requestType == "" {
+		requestType = "out"
+	}
+	if requestType != "in" && requestType != "out" {
+		return 0, nil, apiErr{"bad_request"}
 	}
 	audit := auditFrom(r.Context())
 	audit.FacultyID = req.FacultyID
@@ -734,10 +748,17 @@ func (s *Server) requestOut(w http.ResponseWriter, r *http.Request) (int, any, e
 	if err != nil {
 		return 0, nil, err
 	}
-	if !verifySig(pub, attendMsgV2("request_out", req.ChallengeID, nonce, req.FacultyID, req.LatMicro, req.LonMicro, req.AccuracyCm), req.Signature) {
+	challengeAction := "request_out"
+	if requestType == "in" {
+		challengeAction = "request_in"
+	}
+	if !verifySig(pub, attendMsgV2(challengeAction, req.ChallengeID, nonce, req.FacultyID, req.LatMicro, req.LonMicro, req.AccuracyCm), req.Signature) {
 		return 0, nil, apiErr{"bad_signature"}
 	}
-	if actionWindowOpenAt(now, cfg, "out") {
+	if actionWindowOpenAt(now, cfg, requestType) {
+		if requestType == "in" {
+			return 0, nil, apiErr{"in_window_open"}
+		}
 		return 0, nil, apiErr{"out_window_open"}
 	}
 	day := now.In(ist).Format("2006-01-02")
@@ -752,21 +773,31 @@ func (s *Server) requestOut(w http.ResponseWriter, r *http.Request) (int, any, e
 		case !errors.Is(err, sql.ErrNoRows):
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT is_in FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, day).Scan(&inState); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+		if requestType == "in" {
+			err = tx.QueryRowContext(ctx, `SELECT is_in FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, day).Scan(&inState)
+			switch {
+			case err == nil && inState != 0:
+				return apiErr{"already_in"}
+			case err != nil && !errors.Is(err, sql.ErrNoRows):
+				return err
+			}
+		} else {
+			if err := tx.QueryRowContext(ctx, `SELECT is_in FROM attendance_state WHERE faculty_id=? AND day=?`, req.FacultyID, day).Scan(&inState); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return apiErr{"not_in"}
+				}
+				return err
+			}
+			if inState == 0 {
 				return apiErr{"not_in"}
 			}
-			return err
-		}
-		if inState == 0 {
-			return apiErr{"not_in"}
 		}
 		if err := consumeChallenge(ctx, tx, req.ChallengeID, nowU); err != nil {
 			return err
 		}
 		requestID = randHex(16)
-		_, err = tx.ExecContext(ctx, `INSERT INTO exit_requests (id, faculty_id, day, requested_at, lat_micro, lon_micro, accuracy_cm, distance_m, challenge_id, status)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`, requestID, req.FacultyID, day, nowU, req.LatMicro, req.LonMicro, req.AccuracyCm, int64(math.Round(dist)), req.ChallengeID)
+		_, err = tx.ExecContext(ctx, `INSERT INTO exit_requests (id, faculty_id, day, requested_at, lat_micro, lon_micro, accuracy_cm, distance_m, challenge_id, request_type, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`, requestID, req.FacultyID, day, nowU, req.LatMicro, req.LonMicro, req.AccuracyCm, int64(math.Round(dist)), req.ChallengeID, requestType)
 		if err != nil {
 			return err
 		}
@@ -779,6 +810,7 @@ func (s *Server) requestOut(w http.ResponseWriter, r *http.Request) (int, any, e
 		"id":               requestID,
 		"faculty_id":       req.FacultyID,
 		"day":              day,
+		"request_type":     requestType,
 		"requested_at_ist": now.In(ist).Format(time.RFC3339),
 		"status":           "pending",
 	}, nil
@@ -863,14 +895,15 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) (int, any, erro
 		default:
 			return err
 		}
-		var pendingID, pendingStatus string
+		var pendingID, pendingStatus, pendingType string
 		var pendingAt int64
-		err = tx.QueryRowContext(ctx, `SELECT id, requested_at, status FROM exit_requests WHERE faculty_id=? AND day=? AND status='pending' ORDER BY requested_at DESC LIMIT 1`, req.FacultyID, today).Scan(&pendingID, &pendingAt, &pendingStatus)
+		err = tx.QueryRowContext(ctx, `SELECT id, requested_at, status, request_type FROM exit_requests WHERE faculty_id=? AND day=? AND status='pending' ORDER BY requested_at DESC LIMIT 1`, req.FacultyID, today).Scan(&pendingID, &pendingAt, &pendingStatus, &pendingType)
 		switch {
 		case err == nil:
 			pendingReq = map[string]any{
 				"id":               pendingID,
 				"requested_at_ist": time.Unix(pendingAt, 0).In(ist).Format(time.RFC3339),
+				"request_type":     pendingType,
 				"status":           pendingStatus,
 			}
 		case errors.Is(err, sql.ErrNoRows):

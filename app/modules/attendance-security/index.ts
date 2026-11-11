@@ -6,7 +6,7 @@ import {
 } from './payload';
 
 export type { AttendAction, AttendanceFields, AttendanceV2Fields, HistoryFields, RequestOutAction, RequestOutFields };
-export { attendRequestOutPayload, attendV2Payload, ATTEND_ACTIONS, REQUEST_OUT_ACTION } from './payload';
+export { attendRequestOutPayload, attendV2Payload, ATTEND_ACTIONS, REQUEST_OUT_ACTION, REQUEST_OUT_ACTIONS } from './payload';
 
 export type SecurityLevel = 'strongbox' | 'trusted_environment' | 'software';
 export type KeyInfo = { securityLevel: SecurityLevel };

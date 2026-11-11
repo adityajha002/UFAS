@@ -1,0 +1,7 @@
+tunnel: ${CF_TUNNEL_ID}
+credentials-file: /etc/cloudflared/creds.json
+
+ingress:
+  - hostname: ${CF_HOSTNAME}
+    service: http://attendance-api:8080
+  - service: http_status:404

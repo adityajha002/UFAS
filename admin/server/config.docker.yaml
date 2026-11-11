@@ -1,0 +1,21 @@
+server:
+  listen: "0.0.0.0:8082"
+  db_file: "/data/attendance.db"
+
+geofence:
+  lat: 28.6068268701292
+  lon: 77.02445575231003
+  radius_m: 1500
+  max_accuracy_m: 80
+
+window:
+  start: "00:00"
+  end: "24:00"
+
+admin:
+  listen: "0.0.0.0:9090"
+  token_sha256: "267989bb21f7171024eb2332bc0734a03eb708ff6f26c460f1ae5cfb7763634f"
+
+audit:
+  retention_days: 180
+  max_rows: 500000

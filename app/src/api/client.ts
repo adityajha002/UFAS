@@ -17,7 +17,8 @@ export type WindowStatus = {
 export type PendingExitRequest = {
   id: string;
   requested_at_ist: string;
-  status: 'pending' | 'approved';
+  request_type?: 'in' | 'out';
+  status: 'pending' | 'approved' | 'rejected';
 };
 export type HistoryResponse = {
   name: string;
@@ -46,7 +47,7 @@ export type AttendanceArgs = {
 // unknown `action` field with bad_request.
 export type { AttendAction };
 export type AttendanceV2Args = AttendanceArgs & { action: AttendAction };
-export type RequestOutArgs = AttendanceArgs;
+export type RequestOutArgs = AttendanceArgs & { action?: 'in' | 'out' };
 // PROVISIONAL: field names from APP_PLAN.md APP-1 step 3; check against 00_OVERVIEW.md §5.1
 // (not in the repo yet) and the SRV-2 handler.
 export type AttendanceV2Response = {
@@ -146,7 +147,7 @@ export function createClient({ baseUrl, fallbackBaseUrls = [], fetchImpl, timeou
       }),
     requestOut: (a: RequestOutArgs) =>
       post<RequestOutResponse>('/attendance/request-out', {
-        faculty_id: a.facultyId, challenge_id: a.challengeId,
+        action: a.action ?? 'out', faculty_id: a.facultyId, challenge_id: a.challengeId,
         lat_micro: a.latMicro, lon_micro: a.lonMicro, accuracy_cm: a.accuracyCm, signature: a.signature,
       }),
     history: (a: HistoryArgs) =>

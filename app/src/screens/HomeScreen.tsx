@@ -34,9 +34,10 @@ export default function HomeScreen({ facultyId, name, onNeedsEnrol }: Props) {
 
   // v2: MARK IN / MARK OUT from the server's `is_in`; unknown until /history answers this session.
   const io = inOutBase(h.data, h.fresh);
-  const requestAction = io.action === 'request_out' && !io.pending;
-  const v2 = useMarkInOut({ facultyId, action: io.action === 'request_out' ? null : io.action, onDone: h.afterMark });
-  const request = useRequestOut({ facultyId, onDone: () => h.afterMark() });
+  const requestAction = (io.action === 'request_in' || io.action === 'request_out') && !io.pending;
+  const requestType = io.action === 'request_in' ? 'in' : io.action === 'request_out' ? 'out' : null;
+  const v2 = useMarkInOut({ facultyId, action: io.action === 'request_in' || io.action === 'request_out' ? null : io.action, onDone: h.afterMark });
+  const request = useRequestOut({ facultyId, action: requestType ?? 'out', onDone: () => h.afterMark() });
   const v2Button = inOutButton(io, v2.busy || request.busy, h.status);
 
   const card = mode === 'v1'

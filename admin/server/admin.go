@@ -105,6 +105,7 @@ func (s *Server) adminRoutes() http.Handler {
 	api.HandleFunc("GET /admin/api/exit-requests", s.adminJSON(s.adminExitRequestList))
 	api.HandleFunc("GET /admin/api/exit-requests/{request_id}", s.adminJSON(s.adminExitRequestOne))
 	api.HandleFunc("POST /admin/api/exit-requests/{request_id}/approve", s.adminJSON(s.adminExitRequestApprove))
+	api.HandleFunc("POST /admin/api/exit-requests/{request_id}/reject", s.adminJSON(s.adminExitRequestReject))
 	api.HandleFunc("GET /admin/api/faculty", s.adminJSON(s.adminFacultyList))
 	api.HandleFunc("POST /admin/api/faculty", s.adminJSON(s.adminFacultyAdd))
 	api.HandleFunc("GET /admin/api/faculty/{employee_id}/attendance", s.adminJSON(s.adminFacultyAttendance))

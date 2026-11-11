@@ -73,6 +73,25 @@ func (e *env) wantErr(status int, out map[string]any, code string, wantStatus in
 	}
 }
 
+func TestHealthEndpoint(t *testing.T) {
+	e := newEnv(t)
+	resp, err := http.Get(e.ts.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode health payload: %v", err)
+	}
+	if out["status"] != "ok" {
+		t.Fatalf("health status payload = %v, want ok", out)
+	}
+}
+
 // phone is the fake handset: a real P-256 key that signs exactly like the Kotlin module.
 type phone struct {
 	e         *env
@@ -374,6 +393,41 @@ func TestConcurrentSubmitsOneRecord(t *testing.T) {
 	wg.Wait()
 	if ok.Load() != 1 || e.countAttendance() != 1 {
 		t.Fatalf("successes=%d records=%d, want 1 and 1", ok.Load(), e.countAttendance())
+	}
+}
+
+func TestRequestInPending(t *testing.T) {
+	e := newEnv(t)
+	e.s.setConfig(Config{
+		GeoLat: 28.6139, GeoLon: 77.2090, RadiusM: 150, MaxAccM: 50,
+		AttendanceWindows: AttendanceWindows{
+			IN:  []AttendanceWindow{{ID: "in-morning", Start: 9 * 60, End: 10 * 60}},
+			OUT: []AttendanceWindow{{ID: "out-evening", Start: 16 * 60, End: 17 * 60}},
+		},
+	})
+	p := e.enroll("F001", "Dr. Rao")
+	e.setClock(time.Date(2026, 10, 23, 10, 30, 0, 0, ist))
+
+	cid, nonce := p.challenge()
+	st, out := e.post("/attendance/request-out", map[string]any{
+		"action": "in", "faculty_id": p.facultyID, "challenge_id": cid,
+		"lat_micro": geoLatMicro, "lon_micro": geoLonMicro, "accuracy_cm": 1500,
+		"signature": p.sign(attendMsgV2("request_in", cid, nonce, p.facultyID, geoLatMicro, geoLonMicro, 1500)),
+	})
+	if st != 201 || out["status"] != "pending" {
+		t.Fatalf("request in: %d %v", st, out)
+	}
+	if got := out["request_type"]; got != "in" {
+		t.Fatalf("request type should be in, got %#v", got)
+	}
+
+	st, out = p.history()
+	if st != 200 {
+		t.Fatalf("history after request: %d %v", st, out)
+	}
+	pending, ok := out["pending_exit_request"].(map[string]any)
+	if !ok || pending["status"] != "pending" || pending["request_type"] != "in" {
+		t.Fatalf("history should include pending request with request_type=in: %v", out["pending_exit_request"])
 	}
 }
 

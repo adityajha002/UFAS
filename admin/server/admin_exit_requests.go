@@ -40,6 +40,7 @@ type exitRequestItem struct {
 	Day            string  `json:"day"`
 	RequestedAt    int64   `json:"requested_at"`
 	RequestedAtIST string  `json:"requested_at_ist"`
+	RequestType    string  `json:"request_type"`
 	LatMicro       int64   `json:"lat_micro"`
 	LonMicro       int64   `json:"lon_micro"`
 	AccuracyCM     int64   `json:"accuracy_cm"`
@@ -47,18 +48,20 @@ type exitRequestItem struct {
 	Status         string  `json:"status"`
 	ApprovedAtIST  *string `json:"approved_at_ist"`
 	ApprovedBy     *string `json:"approved_by"`
+	RejectedAtIST  *string `json:"rejected_at_ist,omitempty"`
+	RejectedBy     *string `json:"rejected_by,omitempty"`
 	IsIn           *bool   `json:"is_in,omitempty"` // detail only: current attendance state
 }
 
-const exitRequestCols = `r.id, f.employee_id, f.name, r.day, r.requested_at, r.lat_micro, r.lon_micro,
-	r.accuracy_cm, r.distance_m, r.status, r.approved_at, r.approved_by`
+const exitRequestCols = `r.id, f.employee_id, f.name, r.day, r.requested_at, r.request_type, r.lat_micro, r.lon_micro,
+	r.accuracy_cm, r.distance_m, r.status, r.approved_at, r.approved_by, r.rejected_at, r.rejected_by`
 
 func scanExitRequest(sc interface{ Scan(...any) error }) (exitRequestItem, error) {
 	var it exitRequestItem
-	var appAt sql.NullInt64
-	var appBy sql.NullString
-	if err := sc.Scan(&it.ID, &it.EmployeeID, &it.Name, &it.Day, &it.RequestedAt, &it.LatMicro,
-		&it.LonMicro, &it.AccuracyCM, &it.DistanceM, &it.Status, &appAt, &appBy); err != nil {
+	var appAt, rejAt sql.NullInt64
+	var appBy, rejBy sql.NullString
+	if err := sc.Scan(&it.ID, &it.EmployeeID, &it.Name, &it.Day, &it.RequestedAt, &it.RequestType, &it.LatMicro,
+		&it.LonMicro, &it.AccuracyCM, &it.DistanceM, &it.Status, &appAt, &appBy, &rejAt, &rejBy); err != nil {
 		return it, err
 	}
 	it.RequestedAtIST = fmtIST(it.RequestedAt)
@@ -66,7 +69,15 @@ func scanExitRequest(sc interface{ Scan(...any) error }) (exitRequestItem, error
 		v := fmtIST(appAt.Int64)
 		it.ApprovedAtIST = &v
 	}
+	if rejAt.Valid {
+		v := fmtIST(rejAt.Int64)
+		it.RejectedAtIST = &v
+	}
 	it.ApprovedBy = strPtr(appBy)
+	it.RejectedBy = strPtr(rejBy)
+	if it.RequestType == "" {
+		it.RequestType = "out"
+	}
 	return it, nil
 }
 
@@ -79,7 +90,7 @@ func (s *Server) adminExitRequestList(w http.ResponseWriter, r *http.Request) (i
 	if status == "" {
 		status = "pending"
 	}
-	if status != "pending" && status != "approved" && status != "all" {
+	if status != "pending" && status != "approved" && status != "rejected" && status != "all" {
 		return 0, nil, apiErr{"bad_request"}
 	}
 	var where []string
@@ -165,6 +176,16 @@ func (s *Server) adminExitRequestApprove(w http.ResponseWriter, r *http.Request)
 	var reqDay string
 
 	terr := withTx(r.Context(), s.db, func(tx *sql.Tx) error {
+		var requestType string
+		if err := tx.QueryRow(`SELECT request_type FROM exit_requests WHERE id = ?`, id).Scan(&requestType); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return adminErr{code: "not_found", msg: "no such exit request"}
+			}
+			return err
+		}
+		if requestType == "" {
+			requestType = "out"
+		}
 		res, err := tx.Exec(`UPDATE exit_requests SET status = 'approved', approved_at = ?, approved_by = ?, attendance_day = day
 			WHERE id = ? AND status = 'pending'`, approvedAt, approvedBy, id)
 		if err != nil {
@@ -189,6 +210,21 @@ func (s *Server) adminExitRequestApprove(w http.ResponseWriter, r *http.Request)
 			return err
 		}
 		target = emp
+
+		if requestType == "in" {
+			if _, err := tx.Exec(`INSERT INTO attendance_state (faculty_id, day, is_in, started_at, today_worked_s, updated_at)
+				VALUES (?, ?, 1, ?, 0, ?)
+				ON CONFLICT(faculty_id, day) DO UPDATE SET is_in = 1, started_at = excluded.started_at, updated_at = excluded.updated_at`, facultyID, day, approvedAt, approvedAt); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`INSERT INTO attendance (faculty_id, day, marked_at, lat_micro, lon_micro, accuracy_cm, distance_m)
+				VALUES (?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(faculty_id, day) DO UPDATE SET marked_at = excluded.marked_at, lat_micro = excluded.lat_micro,
+					lon_micro = excluded.lon_micro, accuracy_cm = excluded.accuracy_cm, distance_m = excluded.distance_m`, facultyID, day, approvedAt, lat, lon, acc, dist); err != nil {
+				return err
+			}
+			return nil
+		}
 
 		var isIn int64
 		var startedAt sql.NullInt64
@@ -240,4 +276,29 @@ func (s *Server) adminExitRequestApprove(w http.ResponseWriter, r *http.Request)
 		"today_worked_s":  workedTotal,
 		"is_in":           false,
 	}, nil
+}
+
+func (s *Server) adminExitRequestReject(w http.ResponseWriter, r *http.Request) (status int, body any, err error) {
+	id := r.PathValue("request_id")
+	if r.Method != http.MethodPost {
+		return 0, nil, adminErr{code: "method_not_allowed"}
+	}
+	now := s.now()
+	rejectedAt := now.Unix()
+	rejectedBy := "admin@" + remoteIP(r)
+	res, err := s.db.Exec(`UPDATE exit_requests SET status = 'rejected', rejected_at = ?, rejected_by = ? WHERE id = ? AND status = 'pending'`, rejectedAt, rejectedBy, id)
+	if err != nil {
+		return 0, nil, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		var st string
+		switch err := s.db.QueryRow(`SELECT status FROM exit_requests WHERE id = ?`, id).Scan(&st); {
+		case errors.Is(err, sql.ErrNoRows):
+			return 0, nil, adminErr{code: "not_found", msg: "no such exit request"}
+		case err != nil:
+			return 0, nil, err
+		}
+		return 0, nil, adminErr{code: "already_approved"}
+	}
+	return 200, map[string]any{"id": id, "status": "rejected", "rejected_at_ist": fmtIST(rejectedAt)}, nil
 }
