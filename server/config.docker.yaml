@@ -12,14 +12,14 @@ attendance_windows:
   in_windows:
     - id: "in-morning"
       start: "09:00"
-      end: "12:00"
+      end: "12:59"
     - id: "in-afternoon"
       start: "13:00"
-      end: "14:00"
+      end: "15:00"
   out_windows:
     - id: "out-lunch"
       start: "10:00"
-      end: "12:00"
+      end: "15:00"
     - id: "out-evening"
       start: "16:00"
       end: "17:00"
