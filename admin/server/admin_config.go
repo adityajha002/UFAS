@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 )
 
 type change struct {
@@ -26,8 +27,10 @@ var cfgFields = []cfgMeta{
 	{"geofence.lon", "Geofence centre longitude", "float", "deg", true, f64(-180), f64(180)},
 	{"geofence.radius_m", "Geofence radius", "float", "m", true, f64(0), nil},
 	{"geofence.max_accuracy_m", "Maximum GPS error accepted", "float", "m", true, f64(0), nil},
-	{"window.start", "Attendance window opens", "time", "HH:MM", true, nil, nil},
-	{"window.end", "Attendance window closes", "time", "HH:MM", true, nil, nil},
+	{"attendance_windows.in_windows", "Entry (IN) timing windows", "windows", "", true, nil, nil},
+	{"attendance_windows.out_windows", "Exit (OUT) timing windows", "windows", "", true, nil, nil},
+	{"window.start", "Fallback window opens", "time", "HH:MM", true, nil, nil},
+	{"window.end", "Fallback window closes", "time", "HH:MM", true, nil, nil},
 	{"server.listen", "Phone-facing listen address", "string", "", false, nil, nil},
 	{"server.db_file", "Database file", "string", "", false, nil, nil},
 	{"admin.listen", "Admin listen address", "string", "", false, nil, nil},
@@ -59,7 +62,7 @@ func (s *Server) configFields(cur Config) []cfgFieldOut {
 		if m.editable {
 			f.YAMLValue = cfgGet(s.base, m.key)
 			f.Source = "yaml"
-			if f.Value != f.YAMLValue {
+			if !reflect.DeepEqual(f.Value, f.YAMLValue) {
 				f.Source = "override"
 			}
 		}
@@ -89,12 +92,17 @@ type configPatch struct {
 		Start *string `json:"start"`
 		End   *string `json:"end"`
 	} `json:"window"`
+	AttendanceWindows *struct {
+		IN  *[]windowDTO `json:"in_windows"`
+		OUT *[]windowDTO `json:"out_windows"`
+	} `json:"attendance_windows"`
 }
 
 func (p configPatch) empty() bool {
-	g, w := p.Geofence, p.Window
+	g, w, aw := p.Geofence, p.Window, p.AttendanceWindows
 	return (g == nil || (g.Lat == nil && g.Lon == nil && g.RadiusM == nil && g.MaxAccM == nil)) &&
-		(w == nil || (w.Start == nil && w.End == nil))
+		(w == nil || (w.Start == nil && w.End == nil)) &&
+		(aw == nil || (aw.IN == nil && aw.OUT == nil))
 }
 
 func editableErrs(c Config) map[string]string {
@@ -168,6 +176,24 @@ func (s *Server) adminConfigPatch(w http.ResponseWriter, r *http.Request) (statu
 			}
 		}
 	}
+	if aw := p.AttendanceWindows; aw != nil {
+		if aw.IN != nil {
+			ws, err := dtoToWindows(*aw.IN)
+			if err != nil {
+				fields["attendance_windows.in_windows"] = err.Error()
+			} else {
+				cand.AttendanceWindows.IN = ws
+			}
+		}
+		if aw.OUT != nil {
+			ws, err := dtoToWindows(*aw.OUT)
+			if err != nil {
+				fields["attendance_windows.out_windows"] = err.Error()
+			} else {
+				cand.AttendanceWindows.OUT = ws
+			}
+		}
+	}
 	for k, msg := range editableErrs(cand) { // the same rules as startup
 		if _, dup := fields[k]; !dup {
 			fields[k] = msg
@@ -203,7 +229,7 @@ func (s *Server) saveConfig(ctx context.Context, r *http.Request, cand Config, c
 	}
 	err = withTx(ctx, s.db, func(tx *sql.Tx) error {
 		for k := range changed {
-			if cfgGet(cand, k) == cfgGet(s.base, k) {
+			if reflect.DeepEqual(cfgGet(cand, k), cfgGet(s.base, k)) {
 				// back at the YAML value: drop the override instead of storing a duplicate
 				if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, k); err != nil {
 					return err

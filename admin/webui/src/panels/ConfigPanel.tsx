@@ -2,13 +2,13 @@ import { useState } from "react";
 import { api, ApiError } from "../api";
 import { errText, useApp } from "../ctx";
 import { usePolling } from "../hooks/usePolling";
-import { buildPatch, describeChanges } from "../lib/config";
-import type { ConfigField } from "../types";
+import { buildPatch, describeChanges, windowsEqual } from "../lib/config";
+import type { AttendanceWindowItem, ConfigField } from "../types";
 
 export function ConfigPanel() {
   const { down, toast, notify, openModal } = useApp();
   const [fields, setFields] = useState<ConfigField[] | null>(null);
-  const [draft, setDraft] = useState<Record<string, string>>({});   // only rows the user edited
+  const [draft, setDraft] = useState<Record<string, string | AttendanceWindowItem[]>>({});   // only rows the user edited
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loadErr, setLoadErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -30,6 +30,21 @@ export function ConfigPanel() {
       if (v === String(f.value)) delete n[f.key]; else n[f.key] = v;
       return n;
     });
+  }
+  function editWindows(f: ConfigField, list: AttendanceWindowItem[]) {
+    setPreview(""); setErrors((e) => { const n = { ...e }; delete n[f.key]; return n; });
+    const base = (f.value as AttendanceWindowItem[]) ?? [];
+    setDraft((d) => {
+      const n = { ...d };
+      if (windowsEqual(list, base)) delete n[f.key]; else n[f.key] = list;
+      return n;
+    });
+  }
+  function nextWindowId(prefix: string, current: AttendanceWindowItem[]) {
+    const used = new Set(current.map((w) => w.id.trim()));
+    let i = current.length + 1;
+    while (used.has(`${prefix}-${i}`)) i++;
+    return `${prefix}-${i}`;
   }
   function cancel() { setDraft({}); setErrors({}); setPreview(""); }
 
@@ -66,10 +81,49 @@ export function ConfigPanel() {
         {loadErr && <p className="field-err" role="alert">{loadErr}</p>}
         {!fields && !loadErr && <p className="muted">Loading…</p>}
         {fields?.map((f) => {
-          const shown = draft[f.key] ?? String(f.value);
           const err = errors[f.key] ?? localErrors[f.key];
           const overridden = f.source === "override";
           const id = `cfg-${f.key}`;
+          if (f.type === "windows") {
+            const list = (draft[f.key] as AttendanceWindowItem[] | undefined) ?? (f.value as AttendanceWindowItem[] | undefined) ?? [];
+            const prefix = f.key.includes("out") ? "out" : "in";
+            return (
+              <div key={f.key} className="cfg-row cfg-row-win">
+                <div className="cfg-label">
+                  <span>{f.label}</span>
+                  {overridden && <span className="chip warn">overridden</span>}
+                </div>
+                <div className="cfg-windows">
+                  {list.length === 0 && <span className="muted small">No windows configured (uses fallback window)</span>}
+                  {list.map((w, idx) => (
+                    <div key={idx} className="cfg-win-row">
+                      <input className="win-id" value={w.id} placeholder="id" aria-label={`${f.label} ${idx + 1} id`}
+                        onChange={(e) => editWindows(f, list.map((x, i) => i === idx ? { ...x, id: e.target.value } : x))} />
+                      <input type="time" value={w.start} aria-label={`${f.label} ${idx + 1} start`}
+                        onChange={(e) => editWindows(f, list.map((x, i) => i === idx ? { ...x, start: e.target.value } : x))} />
+                      <span className="muted">–</span>
+                      <input type="time" value={w.end} aria-label={`${f.label} ${idx + 1} end`}
+                        onChange={(e) => editWindows(f, list.map((x, i) => i === idx ? { ...x, end: e.target.value } : x))} />
+                      <button type="button" className="icon-btn" aria-label={`Remove window ${w.id || idx + 1}`}
+                        onClick={() => editWindows(f, list.filter((_, i) => i !== idx))}>×</button>
+                    </div>
+                  ))}
+                  <div className="cfg-win-actions">
+                    <button type="button" className="btn small"
+                      onClick={() => editWindows(f, [...list, { id: nextWindowId(prefix, list), start: "09:00", end: "17:00" }])}>
+                      + Add window
+                    </button>
+                    {overridden && (
+                      <button type="button" className="icon-btn" onClick={() => reset(f)}
+                        aria-label={`Restore ${f.label} to config.yaml`} title="Restore config.yaml value">↺</button>
+                    )}
+                  </div>
+                </div>
+                {err && <p className="field-err" role="alert">{err}</p>}
+              </div>
+            );
+          }
+          const shown = String(draft[f.key] ?? f.value);
           return (
             <div key={f.key} className={f.editable ? "cfg-row" : "cfg-row ro"}>
               <div className="cfg-label">

@@ -137,6 +137,12 @@ ul.banner { padding-left: 24px; list-style: disc; }
 .cfg-row.ro { opacity: .8; }
 .unit { font-size: 12px; color: var(--ink-soft); }
 .cfg-row .field-err { grid-column: 1 / -1; margin: 0; }
+.cfg-row-win { align-items: start; }
+.cfg-windows { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cfg-win-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.cfg-win-row .win-id { width: 88px; min-width: 64px; font-size: 12px; }
+.cfg-win-row input[type="time"] { min-width: 96px; text-align: center; border-radius: 5px; }
+.cfg-win-actions { display: flex; align-items: center; gap: 6px; }
 .sticky-foot { position: sticky; bottom: -16px; margin: 10px -18px -16px; padding: 8px 18px; background: var(--panel-top); border-top: 1px solid var(--divider); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 

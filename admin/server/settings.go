@@ -6,16 +6,50 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 )
+
+type windowDTO struct {
+	ID    string `json:"id"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+func windowsToDTO(ws []AttendanceWindow) []windowDTO {
+	out := make([]windowDTO, len(ws))
+	for i, w := range ws {
+		out[i] = windowDTO{ID: w.ID, Start: fmtHM(w.Start), End: fmtHM(w.End)}
+	}
+	return out
+}
+
+func dtoToWindows(dtos []windowDTO) ([]AttendanceWindow, error) {
+	out := make([]AttendanceWindow, len(dtos))
+	for i, d := range dtos {
+		sMin, err := parseWindowTime(strings.TrimSpace(d.Start))
+		if err != nil {
+			return nil, fmt.Errorf("window %q start: %w", d.ID, err)
+		}
+		eMin, err := parseWindowTime(strings.TrimSpace(d.End))
+		if err != nil {
+			return nil, fmt.Errorf("window %q end: %w", d.ID, err)
+		}
+		out[i] = AttendanceWindow{ID: strings.TrimSpace(d.ID), Start: sMin, End: eMin}
+	}
+	return out, nil
+}
 
 var editableKeys = []string{
 	"geofence.lat", "geofence.lon", "geofence.radius_m", "geofence.max_accuracy_m",
 	"window.start", "window.end",
+	"attendance_windows.in_windows", "attendance_windows.out_windows",
 }
 
 func isEditableKey(k string) bool {
@@ -42,6 +76,10 @@ func cfgGet(c Config, key string) any {
 		return fmtHM(c.WinStart)
 	case "window.end":
 		return fmtHM(c.WinEnd)
+	case "attendance_windows.in_windows":
+		return windowsToDTO(c.AttendanceWindows.IN)
+	case "attendance_windows.out_windows":
+		return windowsToDTO(c.AttendanceWindows.OUT)
 	case "server.listen":
 		return c.Listen
 	case "server.db_file":
@@ -63,6 +101,9 @@ func cfgStored(c Config, key string) string {
 		return strconv.FormatFloat(v, 'g', -1, 64)
 	case string:
 		return v
+	case []windowDTO:
+		b, _ := json.Marshal(v)
+		return string(b)
 	}
 	return ""
 }
@@ -106,6 +147,20 @@ func cfgSet(c *Config, key, raw string) error {
 		} else {
 			c.WinEnd = m
 		}
+	case "attendance_windows.in_windows", "attendance_windows.out_windows":
+		var dtos []windowDTO
+		if err := json.Unmarshal([]byte(raw), &dtos); err != nil {
+			return err
+		}
+		ws, err := dtoToWindows(dtos)
+		if err != nil {
+			return err
+		}
+		if key == "attendance_windows.in_windows" {
+			c.AttendanceWindows.IN = ws
+		} else {
+			c.AttendanceWindows.OUT = ws
+		}
 	default:
 		return fmt.Errorf("unknown setting")
 	}
@@ -116,7 +171,7 @@ func cfgSet(c *Config, key, raw string) error {
 func diffConfig(a, b Config) map[string]change {
 	out := map[string]change{}
 	for _, k := range editableKeys {
-		if av, bv := cfgGet(a, k), cfgGet(b, k); av != bv {
+		if av, bv := cfgGet(a, k), cfgGet(b, k); !reflect.DeepEqual(av, bv) {
 			out[k] = change{Old: av, New: bv}
 		}
 	}

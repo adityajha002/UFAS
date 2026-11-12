@@ -74,9 +74,11 @@ export type UserAttendance = {
   days: UserDay[]; days_truncated: boolean;
 };
 
+export type AttendanceWindowItem = { id: string; start: string; end: string };
+
 export type ConfigField = {
-  key: string; label: string; type: "float" | "time" | "string" | "int"; unit?: string;
-  value: number | string; yaml_value?: number | string; source?: "yaml" | "override";
+  key: string; label: string; type: "float" | "time" | "string" | "int" | "windows"; unit?: string;
+  value: number | string | AttendanceWindowItem[]; yaml_value?: number | string | AttendanceWindowItem[]; source?: "yaml" | "override";
   editable: boolean; restart_required?: boolean; min?: number; max?: number;
 };
 export type ConfigBody = { fields: ConfigField[]; changed?: Record<string, { old: unknown; new: unknown }> };

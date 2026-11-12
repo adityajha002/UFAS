@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -66,7 +67,84 @@ func (s *Server) config() Config {
 	if s == nil || s.cfg.Load() == nil {
 		return Config{}
 	}
-	return *s.cfg.Load()
+	cfg := *s.cfg.Load()
+	if s.db != nil {
+		cfg = applySettingsOverrides(s.db, cfg)
+	}
+	return cfg
+}
+
+type settingsWindowDTO struct {
+	ID    string `json:"id"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+func applySettingsOverrides(db *sql.DB, cfg Config) Config {
+	rows, err := db.Query(`SELECT key, value FROM settings`)
+	if err != nil {
+		return cfg
+	}
+	defer rows.Close()
+	cand := cfg
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return cfg
+		}
+		switch k {
+		case "geofence.lat":
+			if f, err := strconv.ParseFloat(v, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
+				cand.GeoLat = f
+			}
+		case "geofence.lon":
+			if f, err := strconv.ParseFloat(v, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
+				cand.GeoLon = f
+			}
+		case "geofence.radius_m":
+			if f, err := strconv.ParseFloat(v, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
+				cand.RadiusM = f
+			}
+		case "geofence.max_accuracy_m":
+			if f, err := strconv.ParseFloat(v, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
+				cand.MaxAccM = f
+			}
+		case "window.start":
+			if m, err := parseWindowTime(v); err == nil {
+				cand.WinStart = m
+			}
+		case "window.end":
+			if m, err := parseWindowTime(v); err == nil {
+				cand.WinEnd = m
+			}
+		case "attendance_windows.in_windows", "attendance_windows.out_windows":
+			var dtos []settingsWindowDTO
+			if err := json.Unmarshal([]byte(v), &dtos); err == nil {
+				ws := make([]AttendanceWindow, 0, len(dtos))
+				ok := true
+				for _, d := range dtos {
+					sm, e1 := parseWindowTime(strings.TrimSpace(d.Start))
+					em, e2 := parseWindowTime(strings.TrimSpace(d.End))
+					if e1 != nil || e2 != nil {
+						ok = false
+						break
+					}
+					ws = append(ws, AttendanceWindow{ID: strings.TrimSpace(d.ID), Start: sm, End: em})
+				}
+				if ok {
+					if k == "attendance_windows.in_windows" {
+						cand.AttendanceWindows.IN = ws
+					} else {
+						cand.AttendanceWindows.OUT = ws
+					}
+				}
+			}
+		}
+	}
+	if len(validateConfig(cand)) > 0 {
+		return cfg
+	}
+	return cand
 }
 
 func (s *Server) setConfig(c Config) { s.cfg.Store(&c) }

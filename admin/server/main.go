@@ -90,6 +90,29 @@ func parseHM(key, def string) (int, error) {
 	return m, nil
 }
 
+func (w *AttendanceWindow) UnmarshalYAML(value *yaml.Node) error {
+	var raw struct {
+		ID    string `yaml:"id"`
+		Start string `yaml:"start"`
+		End   string `yaml:"end"`
+	}
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	startMin, err := parseWindowTime(raw.Start)
+	if err != nil {
+		return fmt.Errorf("window %q start: %w", raw.ID, err)
+	}
+	endMin, err := parseWindowTime(raw.End)
+	if err != nil {
+		return fmt.Errorf("window %q end: %w", raw.ID, err)
+	}
+	w.ID = raw.ID
+	w.Start = startMin
+	w.End = endMin
+	return nil
+}
+
 type yamlConfig struct {
 	Server struct {
 		Listen string `yaml:"listen"`
@@ -101,7 +124,8 @@ type yamlConfig struct {
 		RadiusM *float64 `yaml:"radius_m"`
 		MaxAccM *float64 `yaml:"max_accuracy_m"`
 	} `yaml:"geofence"`
-	Window struct {
+	AttendanceWindows AttendanceWindows `yaml:"attendance_windows"`
+	Window            struct {
 		Start string `yaml:"start"`
 		End   string `yaml:"end"`
 	} `yaml:"window"`
@@ -132,6 +156,44 @@ func validateConfig(c Config) map[string]string {
 	if c.WinStart >= c.WinEnd {
 		errMap["window.start"] = "must be before window.end"
 		errMap["window.end"] = "must be after window.start"
+	}
+	seenWin := map[string]bool{}
+	for _, section := range []struct {
+		key     string
+		windows []AttendanceWindow
+	}{
+		{key: "attendance_windows.in_windows", windows: c.AttendanceWindows.IN},
+		{key: "attendance_windows.out_windows", windows: c.AttendanceWindows.OUT},
+	} {
+		for _, w := range section.windows {
+			if w.ID == "" {
+				errMap[section.key] = "window id is required"
+				break
+			}
+			if seenWin[w.ID] {
+				errMap[section.key] = "duplicate window id: " + w.ID
+				break
+			}
+			seenWin[w.ID] = true
+			if w.Start == 24*60 {
+				errMap[section.key] = "start may not be 24:00"
+				break
+			}
+			if w.Start >= w.End || w.End > 24*60 {
+				errMap[section.key] = fmt.Sprintf("window %q: start must be before end", w.ID)
+				break
+			}
+		}
+		if _, hasErr := errMap[section.key]; !hasErr {
+			for i := 0; i < len(section.windows); i++ {
+				for j := i + 1; j < len(section.windows); j++ {
+					a, b := section.windows[i], section.windows[j]
+					if a.Start < b.End && b.Start < a.End {
+						errMap[section.key] = "windows overlap: " + a.ID + " and " + b.ID
+					}
+				}
+			}
+		}
 	}
 	if c.AdminListen != "" {
 		if c.AdminTokenSHA256 != "" { // empty = admin auth disabled
@@ -189,6 +251,9 @@ func loadConfig(path string, needGeo bool) (Config, error) {
 		}
 		if y.Geofence.MaxAccM != nil {
 			c.MaxAccM = *y.Geofence.MaxAccM
+		}
+		if len(y.AttendanceWindows.IN) > 0 || len(y.AttendanceWindows.OUT) > 0 {
+			c.AttendanceWindows = y.AttendanceWindows
 		}
 		if y.Window.Start != "" {
 			c.WinStart, err = parseWindowTime(y.Window.Start)

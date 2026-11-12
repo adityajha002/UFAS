@@ -18,11 +18,23 @@ import (
 // Campus time is fixed UTC+5:30 (India has no daylight saving).
 var ist = time.FixedZone("IST", 5*3600+1800)
 
+type AttendanceWindow struct {
+	ID    string `yaml:"id" json:"id"`
+	Start int    `yaml:"-" json:"-"`
+	End   int    `yaml:"-" json:"-"`
+}
+
+type AttendanceWindows struct {
+	IN  []AttendanceWindow `yaml:"in_windows" json:"in_windows"`
+	OUT []AttendanceWindow `yaml:"out_windows" json:"out_windows"`
+}
+
 type Config struct {
 	DBFile, Listen                   string
 	GeoLat, GeoLon                   float64
 	RadiusM, MaxAccM                 float64
 	WinStart, WinEnd                 int // minutes after midnight, campus time
+	AttendanceWindows                AttendanceWindows
 	AdminListen, AdminTokenSHA256    string
 	AuditRetentionDays, AuditMaxRows int
 }
