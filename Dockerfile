@@ -35,7 +35,7 @@ WORKDIR /app
 COPY --from=builder /out/server /usr/local/bin/server
 COPY --from=builder /out/admin-server /usr/local/bin/admin-server
 
-COPY server/config.docker.yaml /etc/ufas/config.server.yaml
+COPY server/config.yaml /etc/ufas/config.server.yaml
 COPY admin/server/config.docker.yaml /etc/ufas/config.admin.yaml
 COPY scripts/render-entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/server /usr/local/bin/admin-server
